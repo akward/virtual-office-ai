@@ -26,6 +26,17 @@ export interface AppConfig {
   model: string
 }
 
+export interface RepoInfo {
+  full_name: string
+  name: string
+  owner: string
+  private: boolean
+  default_branch: string
+  description: string
+  html_url: string
+  updated_at: string
+}
+
 export interface GitHubSettings {
   token: string
   owner: string
@@ -33,6 +44,8 @@ export interface GitHubSettings {
   branch: string
   connected: boolean
   repoFullName: string
+  username: string
+  autoPush: boolean
 }
 
 export interface Artifact {
