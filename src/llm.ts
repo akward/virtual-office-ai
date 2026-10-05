@@ -10,7 +10,6 @@ function parseRetryMs(errBody: string, attempt: number): number {
   return Math.min(60000, 15000 * (attempt + 1))
 }
 
-/** Call LLM with automatic retry on rate limit (429) */
 export async function callLLM(
   config: AppConfig,
   systemPrompt: string,
@@ -60,7 +59,7 @@ export async function callLLM(
         continue
       }
       throw new Error(
-        `Rate limit Groq (TPM). Sudah dicoba ${maxAttempts}x. Tunggu 1–2 menit lalu kirim lagi, atau ganti model ke llama-3.1-8b-instant. Detail: ${lastErr}`
+        `Rate limit Groq (TPM). Sudah dicoba ${maxAttempts}x. Tunggu 1–2 menit lalu kirim lagi, atau ganti model ke openai/gpt-oss-20b. Detail: ${lastErr}`
       )
     }
 
@@ -70,7 +69,6 @@ export async function callLLM(
   throw new Error(`LLM gagal setelah retry: ${lastErr}`)
 }
 
-/** Pause between agent calls to stay under free-tier TPM */
 export async function paceBetweenAgents(ms = 12000): Promise<void> {
   await sleep(ms)
 }
@@ -125,12 +123,12 @@ export const PROVIDERS = {
     name: 'Groq (Recommended - Super Cepat)',
     baseUrl: 'https://api.groq.com/openai/v1',
     models: [
-      'llama-3.1-8b-instant',
       'openai/gpt-oss-20b',
       'openai/gpt-oss-120b',
+      'llama-3.1-8b-instant',
       'llama-3.3-70b-versatile',
     ],
-    help: 'Free tier: limit token/menit. App sudah auto-retry + jeda antar agent. Model paling aman: llama-3.1-8b-instant',
+    help: 'Free tier: pakai openai/gpt-oss-20b (paling sering tersedia). Llama sering 404. App auto-retry + jeda antar agent.',
   },
   gemini: {
     name: 'Google Gemini',
