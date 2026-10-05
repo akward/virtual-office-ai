@@ -1,7 +1,7 @@
 import { create } from 'zustand'
-import type { Agent, AppConfig, Artifact, GitHubSettings, Message } from './types'
+import type { Agent, AppConfig, Artifact, GitHubSettings, Message, RepoInfo } from './types'
 import { callLLM, extractArtifacts } from './llm'
-import { loadProjectContext, pushMany, testConnection, type GitHubConfig } from './github'
+import { getAuthenticatedUser, listAllRepos, loadProjectContext, pushMany, type GitHubConfig } from './github'
 
 const defaultAgents: Agent[] = [
   { id: 'manager', name: 'Budi', role: 'Project Manager', color: '#3b82f6', emoji: '👔', status: 'idle', currentTask: '', lastMessage: 'Siap!', x: 18, y: 42 },
@@ -11,7 +11,9 @@ const defaultAgents: Agent[] = [
 ]
 
 function loadGH(): GitHubSettings {
-  if (typeof localStorage === 'undefined') return { token: '', owner: '', repo: '', branch: 'main', connected: false, repoFullName: '' }
+  if (typeof localStorage === 'undefined') {
+    return { token: '', owner: '', repo: '', branch: 'main', connected: false, repoFullName: '', username: '', autoPush: true }
+  }
   return {
     token: localStorage.getItem('vo_gh_token') || '',
     owner: localStorage.getItem('vo_gh_owner') || '',
@@ -19,6 +21,8 @@ function loadGH(): GitHubSettings {
     branch: localStorage.getItem('vo_gh_branch') || 'main',
     connected: localStorage.getItem('vo_gh_connected') === '1',
     repoFullName: localStorage.getItem('vo_gh_fullname') || '',
+    username: localStorage.getItem('vo_gh_user') || '',
+    autoPush: localStorage.getItem('vo_gh_autopush') !== '0',
   }
 }
 
@@ -28,12 +32,15 @@ interface Store {
   artifacts: Artifact[]
   config: AppConfig
   github: GitHubSettings
+  repos: RepoInfo[]
   projectContext: string
   isRunning: boolean
   isPushing: boolean
+  isLoadingRepos: boolean
   setConfig: (c: Partial<AppConfig>) => void
   setGithub: (g: Partial<GitHubSettings>) => void
-  connectGithub: () => Promise<void>
+  connectWithToken: () => Promise<void>
+  selectRepo: (fullName: string) => Promise<void>
   loadContext: () => Promise<void>
   updateAgent: (id: string, patch: Partial<Agent>) => void
   addMessage: (from: string, text: string) => void
@@ -47,9 +54,11 @@ export const useStore = create<Store>((set, get) => ({
   agents: defaultAgents,
   messages: [],
   artifacts: [],
+  repos: [],
   projectContext: '',
   isRunning: false,
   isPushing: false,
+  isLoadingRepos: false,
   config: {
     apiKey: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_api_key') || '' : '',
     baseUrl: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_base_url') || 'https://api.groq.com/openai/v1' : 'https://api.groq.com/openai/v1',
@@ -76,41 +85,63 @@ export const useStore = create<Store>((set, get) => ({
       if (g.branch !== undefined) localStorage.setItem('vo_gh_branch', g.branch)
       if (g.connected !== undefined) localStorage.setItem('vo_gh_connected', g.connected ? '1' : '0')
       if (g.repoFullName !== undefined) localStorage.setItem('vo_gh_fullname', g.repoFullName)
+      if (g.username !== undefined) localStorage.setItem('vo_gh_user', g.username)
+      if (g.autoPush !== undefined) localStorage.setItem('vo_gh_autopush', g.autoPush ? '1' : '0')
     }
     return { github: next }
   }),
 
-  connectGithub: async () => {
+  connectWithToken: async () => {
     const { github, setGithub, addMessage } = get()
-    if (!github.token || !github.owner || !github.repo) throw new Error('Isi Token, Owner, dan Repo')
-    const cfg: GitHubConfig = { token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' }
-    const full = await testConnection(cfg)
-    setGithub({ connected: true, repoFullName: full })
-    addMessage('System', `Terhubung: ${full} (${cfg.branch})`)
+    if (!github.token.trim()) throw new Error('Isi GitHub Personal Access Token dulu')
+    set({ isLoadingRepos: true })
+    try {
+      const username = await getAuthenticatedUser(github.token)
+      const repos = await listAllRepos(github.token)
+      set({ repos })
+      setGithub({ connected: true, username })
+      addMessage('System', `Login @${username}. ${repos.length} repository ditemukan.`)
+      const match = repos.find((r) => r.full_name === github.repoFullName) || repos[0]
+      if (match) await get().selectRepo(match.full_name)
+    } finally {
+      set({ isLoadingRepos: false })
+    }
+  },
+
+  selectRepo: async (fullName: string) => {
+    const { repos, setGithub, addMessage } = get()
+    const r = repos.find((x) => x.full_name === fullName)
+    if (!r) throw new Error('Repo tidak ditemukan')
+    setGithub({ owner: r.owner, repo: r.name, branch: r.default_branch || 'main', repoFullName: r.full_name, connected: true })
+    addMessage('System', `Repo aktif: ${r.full_name} (${r.default_branch})`)
     await get().loadContext()
   },
 
   loadContext: async () => {
     const { github, addMessage } = get()
-    if (!github.connected || !github.token) return
+    if (!github.token || !github.owner || !github.repo) return
     const cfg: GitHubConfig = { token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' }
     try {
       const ctx = await loadProjectContext(cfg)
       set({ projectContext: ctx })
-      addMessage('System', ctx ? `Konteks project dimuat (${ctx.length} karakter).` : 'Repo tanpa file umum.')
+      addMessage('System', ctx ? `Konteks dimuat (${Math.round(ctx.length / 100) / 10}k karakter).` : 'Repo kosong.')
     } catch (e: unknown) {
       addMessage('System', `Gagal konteks: ${e instanceof Error ? e.message : String(e)}`)
     }
   },
 
   updateAgent: (id, patch) => set((s) => ({ agents: s.agents.map((a) => (a.id === id ? { ...a, ...patch } : a)) })),
-  addMessage: (from, text) => set((s) => ({ messages: [...s.messages.slice(-80), { id: crypto.randomUUID(), from, text, timestamp: Date.now() }] })),
+  addMessage: (from, text) => set((s) => ({ messages: [...s.messages.slice(-100), { id: crypto.randomUUID(), from, text, timestamp: Date.now() }] })),
   addArtifacts: (list) => set((s) => ({ artifacts: [...s.artifacts, ...list.map((a) => ({ ...a, id: crypto.randomUUID(), createdAt: Date.now() }))] })),
   clearArtifacts: () => set({ artifacts: [] }),
 
   runTask: async (userTask: string) => {
     const { config, updateAgent, addMessage, addArtifacts, clearArtifacts, projectContext, github } = get()
     if (get().isRunning) return
+    if (!github.connected || !github.repo) {
+      addMessage('System', 'Pilih repository GitHub dulu.')
+      return
+    }
     set({ isRunning: true })
     clearArtifacts()
     addMessage('Kamu', userTask)
@@ -119,23 +150,23 @@ export const useStore = create<Store>((set, get) => ({
       if (artifacts.length) addArtifacts(artifacts.map((a) => ({ filename: a.filename, language: a.language, content: a.content, agentId })))
     }
     const contextBlock = projectContext
-      ? `\n\n## KONTEKS GITHUB (${github.repoFullName})\nEdit project ini:\n${projectContext.slice(0, 8000)}`
-      : ''
+      ? `\n\n## REPO: ${github.repoFullName} (${github.branch})\n${projectContext.slice(0, 8000)}`
+      : `\n\n## REPO: ${github.repoFullName}`
     try {
       updateAgent('manager', { status: 'thinking', currentTask: 'Merencanakan...' })
-      const plan = await callLLM(config, `Kamu Budi, PM. Bahasa Indonesia. ${github.connected ? 'Edit file GitHub yang ada.' : ''}\nFormat: ## Analisis ## Rencana ## Penugasan ## File`, userTask + contextBlock, 1200)
+      const plan = await callLLM(config, `Kamu Budi, PM. Bahasa Indonesia. Target: ${github.repoFullName}. Format: ## Analisis ## Rencana ## Penugasan ## File`, userTask + contextBlock, 1200)
       updateAgent('manager', { status: 'talking', lastMessage: plan.slice(0, 100) + '...', currentTask: 'Instruksi' })
       addMessage('Budi (Manager)', plan)
       const workers = [
-        { id: 'coder', name: 'Andi', system: 'Kamu Andi, Engineer. WAJIB output ```bahasa:path/file.ext\nkode\n``` Path nested OK. Bahasa Indonesia.' },
-        { id: 'researcher', name: 'Siti', system: 'Kamu Siti, Researcher. Output ```markdown:docs/analysis.md\n...``` Bahasa Indonesia.' },
-        { id: 'writer', name: 'Rina', system: 'Kamu Rina, Writer. Output ```markdown:README.md\n...``` Bahasa Indonesia.' },
+        { id: 'coder', name: 'Andi', system: `Kamu Andi, Engineer. Repo ${github.repoFullName}. WAJIB \`\`\`bahasa:path/file.ext\nkode\`\`\` Bahasa Indonesia.` },
+        { id: 'researcher', name: 'Siti', system: 'Kamu Siti. Output \`\`\`markdown:docs/analysis.md\n...\`\`\`' },
+        { id: 'writer', name: 'Rina', system: 'Kamu Rina. Output \`\`\`markdown:README.md\n...\`\`\`' },
       ]
       const results: string[] = []
       for (const w of workers) {
         updateAgent(w.id, { status: 'working', currentTask: 'Kerja...' })
         try {
-          const result = await callLLM(config, w.system, `Tugas:\n${userTask}\n\nRencana:\n${plan}${contextBlock}\n\nWAJIB code block path file.`, 3000)
+          const result = await callLLM(config, w.system, `Tugas:\n${userTask}\n\nRencana:\n${plan}${contextBlock}`, 3000)
           results.push(`### ${w.name}\n${result}`)
           collectFrom(w.id, result)
           updateAgent(w.id, { status: 'done', lastMessage: result.slice(0, 80) + '...', currentTask: 'Selesai' })
@@ -151,10 +182,16 @@ export const useStore = create<Store>((set, get) => ({
       collectFrom('manager', summary)
       updateAgent('manager', { status: 'done', lastMessage: summary.slice(0, 80) + '...', currentTask: 'Selesai' })
       addMessage('Budi (Manager)', summary)
-      if (github.connected) addMessage('System', 'Klik Push ke GitHub di tab File untuk commit.')
+      if (github.autoPush && get().artifacts.length > 0) {
+        addMessage('System', 'Auto-push aktif — commit ke GitHub...')
+        try { await get().pushArtifactsToGithub() } catch (e: unknown) {
+          addMessage('System', 'Auto-push gagal: ' + (e instanceof Error ? e.message : String(e)))
+        }
+      } else if (get().artifacts.length > 0) {
+        addMessage('System', 'File siap. Aktifkan Auto-push atau klik Push GitHub.')
+      }
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
-      addMessage('System', 'Error: ' + msg)
+      addMessage('System', 'Error: ' + (e instanceof Error ? e.message : String(e)))
     } finally {
       set({ isRunning: false })
       setTimeout(() => get().agents.forEach((a) => get().updateAgent(a.id, { status: 'idle', currentTask: '' })), 5000)
@@ -163,13 +200,13 @@ export const useStore = create<Store>((set, get) => ({
 
   pushArtifactsToGithub: async () => {
     const { github, artifacts, addMessage } = get()
-    if (!github.connected || !github.token) throw new Error('Hubungkan GitHub dulu')
+    if (!github.token || !github.owner || !github.repo) throw new Error('Repo belum dipilih')
     if (!artifacts.length) throw new Error('Tidak ada file')
     set({ isPushing: true })
     try {
       const cfg: GitHubConfig = { token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' }
       const { ok, errors } = await pushMany(cfg, artifacts.map((a) => ({ path: a.filename.replace(/^\/+/, ''), content: a.content })), 'Virtual Office AI')
-      if (ok.length) addMessage('System', `Push OK (${ok.length}): ${ok.join(', ')}\nhttps://github.com/${github.owner}/${github.repo}`)
+      if (ok.length) addMessage('System', `✓ Push ke ${github.repoFullName}: ${ok.join(', ')}\nhttps://github.com/${github.owner}/${github.repo}`)
       if (errors.length) addMessage('System', 'Gagal: ' + errors.join('; '))
     } finally {
       set({ isPushing: false })
