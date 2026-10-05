@@ -73,46 +73,111 @@ export async function paceBetweenAgents(ms = 12000): Promise<void> {
   await sleep(ms)
 }
 
+function langToExt(lang: string): string {
+  const l = lang.toLowerCase()
+  if (l === 'javascript' || l === 'js') return 'js'
+  if (l === 'typescript' || l === 'ts') return 'ts'
+  if (l === 'tsx') return 'tsx'
+  if (l === 'python' || l === 'py') return 'py'
+  if (l === 'html' || l === 'htm') return 'html'
+  if (l === 'css') return 'css'
+  if (l === 'json') return 'json'
+  if (l === 'markdown' || l === 'md') return 'md'
+  if (l === 'bash' || l === 'shell' || l === 'sh') return 'sh'
+  if (l === 'yaml' || l === 'yml') return 'yml'
+  if (l === 'xml') return 'xml'
+  if (l === 'sql') return 'sql'
+  if (l === 'text' || l === 'txt' || !l) return 'txt'
+  return l.slice(0, 8)
+}
+
+function pathFromContent(content: string): string | null {
+  const lines = content.split('\n').slice(0, 8)
+  for (const line of lines) {
+    const patterns = [
+      /(?:^|\s)(?:Path|File|Filename|FILE|PATH)\s*[:=]\s*['"]?([^\s'"`*<>]+)/i,
+      /<!--\s*(?:Path|File)\s*[:=]\s*([^\s*->]+)\s*-->/i,
+      /\/\/\s*(?:Path|File)\s*[:=]\s*([^\s]+)/i,
+      /#\s*(?:Path|File)\s*[:=]\s*([^\s]+)/i,
+    ]
+    for (const re of patterns) {
+      const m = line.match(re)
+      if (m?.[1]) {
+        return m[1].replace(/^["']|["']$/g, '').replace(/^\.\//, '').trim()
+      }
+    }
+  }
+  return null
+}
+
+function inferFilename(lang: string, content: string, agentId: string, i: number): string {
+  const c = content.slice(0, 800).toLowerCase()
+  if (c.includes('<!doctype html') || c.includes('<html')) return 'index.html'
+  if (lang === 'css') return 'styles.css'
+  if (lang === 'js' || lang === 'javascript') return 'app.js'
+  if (lang === 'ts' || lang === 'typescript') return 'app.ts'
+  if (c.includes('"name"') && c.includes('"dependencies"')) return 'package.json'
+  if (c.startsWith('# ') && (c.includes('readme') || agentId === 'writer')) return 'README.md'
+  if (lang === 'md' || lang === 'markdown') {
+    return agentId === 'researcher' ? 'docs/analysis.md' : 'README.md'
+  }
+  if (lang === 'yml' || lang === 'yaml' || c.includes('theme:') || c.includes('jekyll')) return '_config.yml'
+  if (lang === 'py' || lang === 'python') return 'main.py'
+  return `output-${agentId}-${i}.${langToExt(lang)}`
+}
+
 export function extractArtifacts(
   text: string,
   agentId: string
 ): { cleanText: string; artifacts: { filename: string; language: string; content: string }[] } {
   const artifacts: { filename: string; language: string; content: string }[] = []
-  const re = /```([a-zA-Z0-9_+-]*)(?::([^\n]+))?\n([\s\S]*?)```/g
+  const re = /```([a-zA-Z0-9_+.-]*)(?::([^\n]+))?\n([\s\S]*?)```/g
   let match
   let i = 0
+  const used = new Set<string>()
 
   while ((match = re.exec(text)) !== null) {
-    const lang = (match[1] || 'txt').toLowerCase()
-    let filename = (match[2] || '').trim()
+    let lang = (match[1] || '').toLowerCase()
+    let filename = (match[2] || '').trim().replace(/^["']|["']$/g, '').replace(/^\.\//, '')
     const content = match[3].trim()
     if (!content) continue
 
-    if (!filename) {
-      const ext =
-        lang === 'javascript' || lang === 'js'
-          ? 'js'
-          : lang === 'typescript' || lang === 'ts'
-            ? 'ts'
-            : lang === 'tsx'
-              ? 'tsx'
-              : lang === 'python' || lang === 'py'
-                ? 'py'
-                : lang === 'html'
-                  ? 'html'
-                  : lang === 'css'
-                    ? 'css'
-                    : lang === 'json'
-                      ? 'json'
-                      : lang === 'markdown' || lang === 'md'
-                        ? 'md'
-                        : lang === 'bash' || lang === 'shell'
-                          ? 'sh'
-                          : 'txt'
-      filename = `output-${agentId}-${++i}.${ext}`
+    if (
+      lang &&
+      !filename &&
+      /\.[a-z0-9]+$/i.test(lang) &&
+      !['html', 'css', 'js', 'ts', 'tsx', 'py', 'md', 'json', 'yml', 'yaml', 'sh', 'bash', 'sql', 'xml', 'txt'].includes(lang)
+    ) {
+      filename = lang
+      const ext = filename.split('.').pop() || 'txt'
+      lang = ext
     }
 
-    artifacts.push({ filename, language: lang || 'text', content })
+    if (!filename) {
+      filename = pathFromContent(content) || ''
+    }
+
+    if (!filename) {
+      filename = inferFilename(lang || 'txt', content, agentId, ++i)
+    } else {
+      i++
+    }
+
+    let finalName = filename
+    let n = 2
+    while (used.has(finalName)) {
+      const parts = filename.split('.')
+      if (parts.length > 1) {
+        const ext = parts.pop()
+        finalName = `${parts.join('.')}-${n}.${ext}`
+      } else {
+        finalName = `${filename}-${n}`
+      }
+      n++
+    }
+    used.add(finalName)
+
+    artifacts.push({ filename: finalName, language: lang || 'text', content })
   }
 
   return { cleanText: text, artifacts }
