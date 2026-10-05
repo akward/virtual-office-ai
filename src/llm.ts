@@ -85,8 +85,13 @@ export const PROVIDERS = {
   groq: {
     name: 'Groq (Recommended - Super Cepat)',
     baseUrl: 'https://api.groq.com/openai/v1',
-    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
-    help: 'Daftar gratis di https://console.groq.com → API Keys',
+    models: [
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+      'llama-3.1-8b-instant',
+      'llama-3.3-70b-versatile',
+    ],
+    help: 'Daftar gratis di https://console.groq.com → API Keys. Jika model 404, pakai openai/gpt-oss-120b atau openai/gpt-oss-20b',
   },
   gemini: {
     name: 'Google Gemini',
@@ -98,10 +103,11 @@ export const PROVIDERS = {
     name: 'OpenRouter (model gratis)',
     baseUrl: 'https://openrouter.ai/api/v1',
     models: [
-      'meta-llama/llama-3.3-70b-instruct:free',
+      'openai/gpt-oss-120b:free',
       'google/gemini-2.0-flash-exp:free',
+      'meta-llama/llama-3.3-70b-instruct:free',
     ],
-    help: 'Daftar di https://openrouter.ai → Keys (model :free)',
+    help: 'Daftar di https://openrouter.ai → Keys (cari model :free)',
   },
   custom: {
     name: 'Custom (OpenAI-compatible)',
