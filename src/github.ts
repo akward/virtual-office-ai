@@ -1,48 +1,51 @@
 /** GitHub REST helpers — list all repos, read/write files, create repo */
 
-export interface GitHubConfig {
+export type GitHubConfig = {
   token: string
   owner: string
   repo: string
   branch: string
 }
 
-export interface RepoFile {
-  path: string
-  content: string
-  sha?: string
-}
-
-export interface RepoInfo {
-  full_name: string
+export type RepoInfo = {
   name: string
+  full_name: string
   owner: string
-  private: boolean
   default_branch: string
-  description: string
+  private: boolean
   html_url: string
-  updated_at: string
+  description: string | null
 }
 
-async function gh(token: string, path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`https://api.github.com${path}`, {
-    ...init,
-    headers: {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${token}`,
-      'X-GitHub-Api-Version': '2022-11-28',
-      'Content-Type': 'application/json',
-      ...(init?.headers || {}),
-    },
-  })
+async function gh(token: string, path: string, init: RequestInit = {}): Promise<Response> {
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    Authorization: `Bearer ${token}`,
+    'X-GitHub-Api-Version': '2022-11-28',
+    ...(init.headers as Record<string, string> | undefined),
+  }
+  if (init.body && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json'
+  }
+  return fetch(`https://api.github.com${path}`, { ...init, headers })
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** UTF-8 safe base64 (works for shell scripts, unicode, etc.) */
+function toBase64(text: string): string {
+  const bytes = new TextEncoder().encode(text)
+  let binary = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  return btoa(binary)
 }
 
 export async function getAuthenticatedUser(token: string): Promise<string> {
   const res = await gh(token, '/user')
-  if (!res.ok) {
-    const t = await res.text()
-    throw new Error(`Token invalid (${res.status}): ${t.slice(0, 120)}`)
-  }
+  if (!res.ok) throw new Error(`GitHub auth gagal: ${res.status}`)
   const data = await res.json()
   return data.login as string
 }
@@ -50,55 +53,42 @@ export async function getAuthenticatedUser(token: string): Promise<string> {
 export async function listAllRepos(token: string): Promise<RepoInfo[]> {
   const repos: RepoInfo[] = []
   let page = 1
-  const perPage = 100
   while (page <= 10) {
-    const res = await gh(
-      token,
-      `/user/repos?per_page=${perPage}&page=${page}&sort=updated&affiliation=owner,collaborator,organization_member`
-    )
-    if (!res.ok) {
-      const t = await res.text()
-      throw new Error(`Gagal list repo: ${res.status} ${t.slice(0, 120)}`)
-    }
-    const batch = await res.json()
-    if (!Array.isArray(batch) || batch.length === 0) break
-    for (const r of batch) {
+    const res = await gh(token, `/user/repos?per_page=100&page=${page}&sort=updated`)
+    if (!res.ok) throw new Error(`Gagal list repo: ${res.status}`)
+    const data = await res.json()
+    if (!Array.isArray(data) || data.length === 0) break
+    for (const r of data) {
       repos.push({
-        full_name: r.full_name,
         name: r.name,
+        full_name: r.full_name,
         owner: r.owner?.login || r.full_name.split('/')[0],
-        private: !!r.private,
         default_branch: r.default_branch || 'main',
-        description: r.description || '',
+        private: !!r.private,
         html_url: r.html_url,
-        updated_at: r.updated_at,
+        description: r.description,
       })
     }
-    if (batch.length < perPage) break
+    if (data.length < 100) break
     page++
   }
   return repos
 }
 
-export async function testConnection(config: GitHubConfig): Promise<string> {
-  const res = await gh(config.token, `/repos/${config.owner}/${config.repo}`)
-  if (!res.ok) {
-    const t = await res.text()
-    throw new Error(`GitHub ${res.status}: ${t.slice(0, 150)}`)
-  }
-  const data = await res.json()
-  return data.full_name as string
-}
-
-export async function getFile(config: GitHubConfig, path: string): Promise<RepoFile | null> {
+export async function getFile(
+  config: GitHubConfig,
+  path: string
+): Promise<{ path: string; content: string; sha: string } | null> {
   const encoded = path.split('/').map(encodeURIComponent).join('/')
   const res = await gh(config.token, `/repos/${config.owner}/${config.repo}/contents/${encoded}?ref=${config.branch}`)
   if (res.status === 404) return null
-  if (!res.ok) throw new Error(`Gagal baca ${path}: ${res.status}`)
+  if (!res.ok) throw new Error(`getFile ${path}: ${res.status}`)
   const data = await res.json()
   if (data.type !== 'file' || !data.content) return null
   const content = atob(data.content.replace(/\n/g, ''))
-  return { path: data.path, content, sha: data.sha }
+  const bytes = Uint8Array.from(content, (c) => c.charCodeAt(0))
+  const text = new TextDecoder().decode(bytes)
+  return { path: data.path, content: text, sha: data.sha }
 }
 
 export async function listDir(config: GitHubConfig, path = ''): Promise<{ path: string; type: string }[]> {
@@ -112,26 +102,39 @@ export async function listDir(config: GitHubConfig, path = ''): Promise<{ path: 
   return data.map((x: { path: string; type: string }) => ({ path: x.path, type: x.type }))
 }
 
-export async function putFile(config: GitHubConfig, path: string, content: string, message: string): Promise<{ html_url?: string }> {
+export async function putFile(
+  config: GitHubConfig,
+  path: string,
+  content: string,
+  message: string
+): Promise<{ html_url?: string }> {
+  const cleanPath = path.replace(/^\/+/, '').replace(/\0/g, '').trim()
+  if (!cleanPath) throw new Error('Path file kosong')
+
   let sha: string | undefined
   try {
-    const existing = await getFile(config, path)
+    const existing = await getFile(config, cleanPath)
     sha = existing?.sha
-  } catch { /* new */ }
+  } catch {
+    /* new file */
+  }
+
   const body: Record<string, string> = {
-    message,
-    content: btoa(unescape(encodeURIComponent(content))),
-    branch: config.branch,
+    message: message.slice(0, 200),
+    content: toBase64(content),
+    branch: config.branch || 'main',
   }
   if (sha) body.sha = sha
-  const encoded = path.split('/').map(encodeURIComponent).join('/')
+
+  const encoded = cleanPath.split('/').map(encodeURIComponent).join('/')
   const res = await gh(config.token, `/repos/${config.owner}/${config.repo}/contents/${encoded}`, {
     method: 'PUT',
     body: JSON.stringify(body),
   })
+
   if (!res.ok) {
     const t = await res.text()
-    throw new Error(`Gagal push ${path}: ${res.status} ${t.slice(0, 200)}`)
+    throw new Error(`Gagal push ${cleanPath}: ${res.status} ${t.slice(0, 180)}`)
   }
   const data = await res.json()
   return { html_url: data.content?.html_url || data.commit?.html_url }
@@ -144,21 +147,50 @@ export async function pushMany(
 ): Promise<{ ok: string[]; errors: string[] }> {
   const ok: string[] = []
   const errors: string[] = []
+
+  const map = new Map<string, string>()
   for (const f of files) {
-    try {
-      await putFile(config, f.path, f.content, `${messagePrefix}: ${f.path}`)
-      ok.push(f.path)
-    } catch (e: unknown) {
-      errors.push(`${f.path}: ${e instanceof Error ? e.message : String(e)}`)
-    }
+    const p = f.path.replace(/^\/+/, '').trim()
+    if (!p || !f.content) continue
+    map.set(p, f.content)
   }
+
+  for (const [path, content] of map) {
+    let success = false
+    let lastErr = ''
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        if (attempt > 0) await sleep(800 * attempt)
+        await putFile(config, path, content, `${messagePrefix}: ${path}`)
+        ok.push(path)
+        success = true
+        break
+      } catch (e: unknown) {
+        lastErr = e instanceof Error ? e.message : String(e)
+        if (/Failed to fetch|429|403|409|rate/i.test(lastErr)) {
+          await sleep(1500 * (attempt + 1))
+          continue
+        }
+        await sleep(500)
+      }
+    }
+    if (!success) errors.push(`${path}: ${lastErr}`)
+    await sleep(350)
+  }
+
   return { ok, errors }
 }
 
 export async function loadProjectContext(config: GitHubConfig, maxFiles = 8): Promise<string> {
   const candidates = [
-    'README.md', 'readme.md', 'package.json', 'src/App.tsx', 'src/main.tsx',
-    'src/index.ts', 'src/index.js', 'app.py', 'main.py', 'index.html', 'Cargo.toml', 'go.mod',
+    'README.md',
+    'readme.md',
+    'package.json',
+    'index.html',
+    'src/App.tsx',
+    'src/main.tsx',
+    'app.py',
+    'main.py',
   ]
   const parts: string[] = []
   let count = 0
@@ -170,55 +202,47 @@ export async function loadProjectContext(config: GitHubConfig, maxFiles = 8): Pr
         parts.push(`--- FILE: ${f.path} ---\n${f.content.slice(0, 4000)}`)
         count++
       }
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
   if (!parts.length) {
     try {
       const list = await listDir(config, '')
       parts.push('--- Struktur root ---\n' + list.map((x) => `${x.type}: ${x.path}`).join('\n'))
-    } catch { /* empty */ }
+    } catch {
+      /* empty */
+    }
   }
   return parts.join('\n\n')
 }
 
-/** Create a new repository under the authenticated user */
 export async function createRepo(
   token: string,
   name: string,
-  options?: { description?: string; private?: boolean; auto_init?: boolean }
+  opts?: { description?: string; private?: boolean; auto_init?: boolean }
 ): Promise<RepoInfo> {
-  const clean = name.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9._-]/g, '')
-  if (!clean) throw new Error('Nama repo tidak valid')
-  if (clean.length > 100) throw new Error('Nama repo terlalu panjang (max 100)')
-
   const res = await gh(token, '/user/repos', {
     method: 'POST',
     body: JSON.stringify({
-      name: clean,
-      description: options?.description || 'Created by Virtual Office AI',
-      private: options?.private ?? false,
-      auto_init: options?.auto_init ?? true,
-      has_issues: true,
-      has_projects: false,
-      has_wiki: false,
+      name: name.trim(),
+      description: opts?.description || '',
+      private: opts?.private ?? false,
+      auto_init: opts?.auto_init ?? true,
     }),
   })
   if (!res.ok) {
     const t = await res.text()
-    if (res.status === 422) {
-      throw new Error(`Repo "${clean}" mungkin sudah ada, atau nama tidak valid. ${t.slice(0, 120)}`)
-    }
-    throw new Error(`Gagal buat repo: ${res.status} ${t.slice(0, 150)}`)
+    throw new Error(`Gagal buat repo: ${res.status} ${t.slice(0, 200)}`)
   }
   const r = await res.json()
   return {
-    full_name: r.full_name,
     name: r.name,
+    full_name: r.full_name,
     owner: r.owner?.login || r.full_name.split('/')[0],
-    private: !!r.private,
     default_branch: r.default_branch || 'main',
-    description: r.description || '',
+    private: !!r.private,
     html_url: r.html_url,
-    updated_at: r.updated_at,
+    description: r.description,
   }
 }
