@@ -19,7 +19,7 @@ function downloadAll(artifacts: { filename: string; content: string }[]) {
 
 async function saveToLocalFolder(artifacts: { filename: string; content: string }[]) {
   // @ts-expect-error File System Access API
-  if (!window.showDirectoryPicker) throw new Error('Gunakan Chrome/Edge untuk simpan ke folder, atau Download.')
+  if (!window.showDirectoryPicker) throw new Error('Gunakan Chrome/Edge atau Download.')
   // @ts-expect-error File System Access API
   const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' })
   let count = 0
@@ -27,10 +27,10 @@ async function saveToLocalFolder(artifacts: { filename: string; content: string 
     const parts = a.filename.replace(/^\/+/, '').split('/')
     let current = dirHandle
     for (let i = 0; i < parts.length - 1; i++) current = await current.getDirectoryHandle(parts[i], { create: true })
-    const fileHandle = await current.getFileHandle(parts[parts.length - 1], { create: true })
-    const writable = await fileHandle.createWritable()
-    await writable.write(a.content)
-    await writable.close()
+    const fh = await current.getFileHandle(parts[parts.length - 1], { create: true })
+    const w = await fh.createWritable()
+    await w.write(a.content)
+    await w.close()
     count++
   }
   return count + ' file disimpan ke folder lokal'
@@ -57,19 +57,20 @@ function Office() {
 }
 
 function SidePanel() {
-  const { agents, messages, artifacts, config, github, isRunning, isPushing, setConfig, setGithub, connectGithub, loadContext, runTask, clearArtifacts, pushArtifactsToGithub, addMessage } = useStore()
+  const {
+    agents, messages, artifacts, config, github, repos,
+    isRunning, isPushing, isLoadingRepos,
+    setConfig, setGithub, connectWithToken, selectRepo, loadContext,
+    runTask, clearArtifacts, pushArtifactsToGithub, addMessage,
+  } = useStore()
   const [task, setTask] = useState('')
   const [showSettings, setShowSettings] = useState(!config.apiKey)
-  const [showGh, setShowGh] = useState(false)
+  const [showGh, setShowGh] = useState(true)
   const [provider, setProvider] = useState<keyof typeof PROVIDERS>('groq')
   const [tab, setTab] = useState<'log' | 'files'>('log')
-  const [ghBusy, setGhBusy] = useState(false)
   const [localBusy, setLocalBusy] = useState(false)
-
-  const handleProviderChange = (p: keyof typeof PROVIDERS) => {
-    setProvider(p)
-    setConfig({ baseUrl: PROVIDERS[p].baseUrl, model: PROVIDERS[p].models[0] })
-  }
+  const [repoFilter, setRepoFilter] = useState('')
+  const filteredRepos = repos.filter((r) => !repoFilter || r.full_name.toLowerCase().includes(repoFilter.toLowerCase()))
 
   const handleRun = () => {
     if (!task.trim() || isRunning) return
@@ -81,12 +82,17 @@ function SidePanel() {
   return (
     <div className="panel">
       <div className="panel-section">
-        <div className="section-head"><h2>LLM</h2>
+        <div className="section-head">
+          <h2>LLM</h2>
           <button className="btn-ghost" onClick={() => setShowSettings(!showSettings)}>{showSettings ? 'Sembunyikan' : 'Ubah'}</button>
         </div>
         {showSettings && (<>
           <div className="config-row"><label>Provider</label>
-            <select value={provider} onChange={(e) => handleProviderChange(e.target.value as keyof typeof PROVIDERS)}>
+            <select value={provider} onChange={(e) => {
+              const p = e.target.value as keyof typeof PROVIDERS
+              setProvider(p)
+              setConfig({ baseUrl: PROVIDERS[p].baseUrl, model: PROVIDERS[p].models[0] })
+            }}>
               {Object.entries(PROVIDERS).map(([k, v]) => <option key={k} value={k}>{v.name}</option>)}
             </select>
             <p className="help-text">{PROVIDERS[provider].help}</p>
@@ -102,43 +108,55 @@ function SidePanel() {
 
       <div className="panel-section">
         <div className="section-head">
-          <h2>GitHub {github.connected && <span className="badge-ok">● {github.repoFullName}</span>}</h2>
+          <h2>GitHub {github.connected && <span className="badge-ok">● @{github.username} · {repos.length} repo</span>}</h2>
           <button className="btn-ghost" onClick={() => setShowGh(!showGh)}>{showGh ? 'Sembunyikan' : 'Atur'}</button>
         </div>
         {showGh && (<>
           <p className="help-text" style={{ marginBottom: 8 }}>
-            Token: <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer">github.com/settings/tokens</a> (scope <b>repo</b>). Hanya tersimpan di browser.
+            Token scope <b>repo</b>:{' '}
+            <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer">buat token</a>. Semua repo muncul otomatis.
           </p>
-          <div className="config-row"><label>Token</label>
-            <input type="password" value={github.token} onChange={(e) => setGithub({ token: e.target.value, connected: false })} placeholder="ghp_..." />
+          <div className="config-row"><label>Personal Access Token</label>
+            <input type="password" value={github.token} onChange={(e) => setGithub({ token: e.target.value })} placeholder="ghp_..." />
           </div>
-          <div className="config-row"><label>Owner</label>
-            <input value={github.owner} onChange={(e) => setGithub({ owner: e.target.value, connected: false })} placeholder="username" />
-          </div>
-          <div className="config-row"><label>Repo</label>
-            <input value={github.repo} onChange={(e) => setGithub({ repo: e.target.value, connected: false })} placeholder="my-project" />
-          </div>
-          <div className="config-row"><label>Branch</label>
-            <input value={github.branch} onChange={(e) => setGithub({ branch: e.target.value })} placeholder="main" />
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button className="btn-ghost" disabled={ghBusy} onClick={async () => {
-              setGhBusy(true)
-              try { await connectGithub() } catch (e: unknown) { addMessage('System', e instanceof Error ? e.message : String(e)) }
-              finally { setGhBusy(false) }
-            }}>{ghBusy ? '...' : github.connected ? 'Hubungkan ulang' : 'Hubungkan'}</button>
-            {github.connected && <button className="btn-ghost" onClick={() => loadContext().catch((e) => addMessage('System', String(e)))}>Muat konteks</button>}
-          </div>
+          <button className="btn-ghost" disabled={isLoadingRepos || !github.token.trim()} onClick={async () => {
+            try { await connectWithToken() } catch (e: unknown) { addMessage('System', e instanceof Error ? e.message : String(e)) }
+          }}>{isLoadingRepos ? 'Memuat semua repo...' : github.connected ? 'Refresh daftar repo' : 'Hubungkan & muat semua repo'}</button>
+
+          {repos.length > 0 && (<>
+            <div className="config-row" style={{ marginTop: 12 }}><label>Cari repo</label>
+              <input value={repoFilter} onChange={(e) => setRepoFilter(e.target.value)} placeholder="filter nama..." />
+            </div>
+            <div className="config-row"><label>Pilih repository ({filteredRepos.length})</label>
+              <select value={github.repoFullName} onChange={async (e) => {
+                try { await selectRepo(e.target.value) } catch (err: unknown) { addMessage('System', err instanceof Error ? err.message : String(err)) }
+              }}>
+                <option value="">— pilih repo —</option>
+                {filteredRepos.map((r) => (
+                  <option key={r.full_name} value={r.full_name}>{r.private ? '🔒 ' : ''}{r.full_name} ({r.default_branch})</option>
+                ))}
+              </select>
+            </div>
+            {github.repoFullName && (
+              <p className="help-text">Aktif: <b>{github.repoFullName}</b> · <b>{github.branch}</b>{' · '}
+                <button className="link-btn" onClick={() => loadContext().catch((e) => addMessage('System', String(e)))}>muat ulang konteks</button>
+              </p>
+            )}
+            <label className="check-row">
+              <input type="checkbox" checked={github.autoPush} onChange={(e) => setGithub({ autoPush: e.target.checked })} />
+              <span>Full auto-push: commit ke GitHub setelah agent selesai</span>
+            </label>
+          </>)}
         </>)}
       </div>
 
       <div className="panel-section">
         <h2>Berikan Tugas</h2>
         <textarea className="task-input" value={task} onChange={(e) => setTask(e.target.value)}
-          placeholder={github.connected ? 'Contoh: Perbaiki UI, update README...' : 'Contoh: Buat landing page + README...'}
+          placeholder={github.repoFullName ? `Tugas untuk ${github.repoFullName}...` : 'Hubungkan GitHub & pilih repo dulu'}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleRun() }} />
-        <button className="btn btn-primary" disabled={isRunning || !task.trim() || !config.apiKey} onClick={handleRun}>
-          {isRunning ? 'Agent bekerja...' : 'Kirim ke Tim AI'}
+        <button className="btn btn-primary" disabled={isRunning || !task.trim() || !config.apiKey || !github.repoFullName} onClick={handleRun}>
+          {isRunning ? 'Agent bekerja...' : github.autoPush ? 'Jalankan + Auto Push' : 'Kirim ke Tim AI'}
         </button>
       </div>
 
@@ -149,7 +167,9 @@ function SidePanel() {
             <div key={a.id} className="agent-item">
               <span className="emoji">{a.emoji}</span>
               <div className="info"><div className="name">{a.name}</div><div className="role">{a.role}</div></div>
-              <span className="status-label" style={{ color: a.status === 'working' || a.status === 'done' ? 'var(--green)' : a.status === 'error' ? 'var(--red)' : a.status === 'thinking' || a.status === 'talking' ? 'var(--yellow)' : 'var(--muted)' }}>{a.status}</span>
+              <span className="status-label" style={{
+                color: a.status === 'working' || a.status === 'done' ? 'var(--green)' : a.status === 'error' ? 'var(--red)' : a.status === 'thinking' || a.status === 'talking' ? 'var(--yellow)' : 'var(--muted)',
+              }}>{a.status}</span>
             </div>
           ))}
         </div>
@@ -162,7 +182,7 @@ function SidePanel() {
         </div>
         {tab === 'log' && (
           <div className="messages">
-            {messages.length === 0 && <div style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>Hubungkan GitHub (opsional), isi API key, kirim tugas.</div>}
+            {messages.length === 0 && <div style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>1. API key LLM · 2. Token GitHub · 3. Pilih repo · 4. Kirim tugas</div>}
             {messages.map((m) => (
               <div key={m.id} className={`msg ${m.from === 'System' ? 'system' : ''}`}>
                 <div className="msg-from">{m.from}</div>
@@ -173,9 +193,7 @@ function SidePanel() {
         )}
         {tab === 'files' && (
           <div className="files-panel">
-            {artifacts.length === 0 ? (
-              <div style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>Belum ada file.</div>
-            ) : (<>
+            {artifacts.length === 0 ? <div style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>Belum ada file.</div> : (<>
               <div className="files-actions">
                 <button className="btn-ghost" onClick={() => downloadAll(artifacts)}>Download</button>
                 <button className="btn-ghost" disabled={localBusy} onClick={async () => {
@@ -183,8 +201,8 @@ function SidePanel() {
                   try { addMessage('System', await saveToLocalFolder(artifacts)); setTab('log') }
                   catch (e: unknown) { addMessage('System', e instanceof Error ? e.message : String(e)) }
                   finally { setLocalBusy(false) }
-                }}>{localBusy ? '...' : 'Ke folder lokal'}</button>
-                <button className="btn-ghost" disabled={!github.connected || isPushing} onClick={async () => {
+                }}>{localBusy ? '...' : 'Folder lokal'}</button>
+                <button className="btn-ghost" disabled={!github.repoFullName || isPushing} onClick={async () => {
                   try { await pushArtifactsToGithub(); setTab('log') }
                   catch (e: unknown) { addMessage('System', e instanceof Error ? e.message : String(e)) }
                 }}>{isPushing ? 'Push...' : 'Push GitHub'}</button>
@@ -211,7 +229,7 @@ export default function App() {
       <div className="office-wrap">
         <div className="office-header">
           <h1>Virtual Office AI Pro</h1>
-          <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>GitHub · Local folder · Multi-agent</span>
+          <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>All repos · Auto-push · Multi-agent</span>
         </div>
         <Office />
       </div>
