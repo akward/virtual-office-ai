@@ -186,16 +186,47 @@ export const useStore = create<Store>((set, get) => ({
       : `\n\n## REPO: ${github.repoFullName}`
     try {
       updateAgent('manager', { status: 'thinking', currentTask: 'Merencanakan...' })
-      const plan = await callLLM(config, `Kamu Budi, PM. Bahasa Indonesia. Target: ${github.repoFullName}. Format: ## Analisis ## Rencana ## Penugasan ## File`, userTask + contextBlock, 900)
+      const plan = await callLLM(config, `Kamu Budi, PM. Bahasa Indonesia. Target: ${github.repoFullName}. Format: ## Analisis ## Rencana ## Penugasan ## File (wajib: index.html, styles.css, app.js, README.md)`, userTask + contextBlock, 900)
       updateAgent('manager', { status: 'talking', lastMessage: plan.slice(0, 100) + '...', currentTask: 'Instruksi' })
       addMessage('Budi (Manager)', plan)
       addMessage('System', 'Jeda anti rate-limit (14 dtk)...')
       await paceBetweenAgents(14000)
 
       const workers = [
-        { id: 'coder', name: 'Andi', system: `Kamu Andi, Engineer. Repo ${github.repoFullName}. WAJIB output code block path file. Bahasa Indonesia.` },
-        { id: 'researcher', name: 'Siti', system: 'Kamu Siti. Output singkat markdown:docs/analysis.md' },
-        { id: 'writer', name: 'Rina', system: 'Kamu Rina. Output singkat markdown:README.md' },
+        {
+          id: 'coder',
+          name: 'Andi',
+          system: `Kamu Andi, Software Engineer untuk repo ${github.repoFullName}.
+WAJIB format SETIAP file dengan path di header fence, contoh:
+\`\`\`html:index.html
+<!DOCTYPE html>...
+\`\`\`
+\`\`\`css:styles.css
+body{}.
+\`\`\`
+\`\`\`js:app.js
+// logic...
+\`\`\`
+JANGAN pakai nama output-coder-*. JANGAN hanya tulis Path di komentar. Bahasa Indonesia singkat.`,
+        },
+        {
+          id: 'researcher',
+          name: 'Siti',
+          system: `Kamu Siti, Researcher. Output SATU file:
+\`\`\`md:docs/analysis.md
+# Analisis
+...
+\`\`\``,
+        },
+        {
+          id: 'writer',
+          name: 'Rina',
+          system: `Kamu Rina, Writer. Output SATU file:
+\`\`\`md:README.md
+# Judul
+...
+\`\`\``,
+        },
       ]
       const results: string[] = []
       for (let wi = 0; wi < workers.length; wi++) {
