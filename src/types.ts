@@ -25,3 +25,12 @@ export interface AppConfig {
   baseUrl: string
   model: string
 }
+
+export interface Artifact {
+  id: string
+  filename: string
+  language: string
+  content: string
+  agentId: string
+  createdAt: number
+}

@@ -1,20 +1,14 @@
-# Virtual Office AI
+# Virtual Office AI Pro
 
-Pixel-art virtual office dengan multi-agent AI yang pintar.
+Multi-agent virtual office dengan output file nyata.
 
 ## Fitur
 - 4 agent (Manager, Coder, Researcher, Writer)
-- Animasi saat agent berpikir / bekerja / bicara
-- Speech bubble real-time
-- Support provider gratis: Groq, Gemini, OpenRouter
+- Animasi office real-time
+- Agent menghasilkan file (kode, markdown) yang bisa di-download
+- Support Groq / Gemini / OpenRouter (gratis)
 
-## Cara pakai online
-Setelah deploy di Vercel, buka URL-nya, isi API Key gratis (Groq recommended), lalu kirim tugas.
+## Online
+Deploy di Vercel — isi API key gratis lalu kirim tugas.
 
-## Local
-```bash
-npm install
-npm run dev
-```
-
-API Key gratis: https://console.groq.com (tanpa kartu kredit)
+API Key: https://console.groq.com
