@@ -65,7 +65,7 @@ export const useStore = create<Store>((set, get) => ({
   config: {
     apiKey: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_api_key') || '' : '',
     baseUrl: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_base_url') || 'https://api.groq.com/openai/v1' : 'https://api.groq.com/openai/v1',
-    model: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_model') || 'llama-3.1-8b-instant' : 'llama-3.1-8b-instant',
+    model: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_model') || 'openai/gpt-oss-20b' : 'openai/gpt-oss-20b',
   },
   github: loadGH(),
 
@@ -193,7 +193,7 @@ export const useStore = create<Store>((set, get) => ({
       await paceBetweenAgents(14000)
 
       const workers = [
-        { id: 'coder', name: 'Andi', system: `Kamu Andi, Engineer. Repo ${github.repoFullName}. WAJIB output code block path file. Bahasa Indonesia. Hemat & lengkap.` },
+        { id: 'coder', name: 'Andi', system: `Kamu Andi, Engineer. Repo ${github.repoFullName}. WAJIB output code block path file. Bahasa Indonesia.` },
         { id: 'researcher', name: 'Siti', system: 'Kamu Siti. Output singkat markdown:docs/analysis.md' },
         { id: 'writer', name: 'Rina', system: 'Kamu Rina. Output singkat markdown:README.md' },
       ]
@@ -206,12 +206,7 @@ export const useStore = create<Store>((set, get) => ({
         }
         updateAgent(w.id, { status: 'working', currentTask: 'Kerja...' })
         try {
-          const result = await callLLM(
-            config,
-            w.system,
-            `Tugas:\n${userTask.slice(0, 1500)}\n\nRencana:\n${plan.slice(0, 2000)}${contextBlock}`,
-            1200
-          )
+          const result = await callLLM(config, w.system, `Tugas:\n${userTask.slice(0, 1500)}\n\nRencana:\n${plan.slice(0, 2000)}${contextBlock}`, 1200)
           results.push(`### ${w.name}\n${result}`)
           collectFrom(w.id, result)
           updateAgent(w.id, { status: 'done', lastMessage: result.slice(0, 80) + '...', currentTask: 'Selesai' })
@@ -226,12 +221,7 @@ export const useStore = create<Store>((set, get) => ({
       addMessage('System', 'Jeda sebelum laporan akhir...')
       await paceBetweenAgents(12000)
       updateAgent('manager', { status: 'thinking', currentTask: 'Laporan...' })
-      const summary = await callLLM(
-        config,
-        'Kamu Budi. Laporan singkat + daftar file (Bahasa Indonesia).',
-        `Tugas: ${userTask.slice(0, 800)}\n\n${results.join('\n').slice(0, 4000)}`,
-        800
-      )
+      const summary = await callLLM(config, 'Kamu Budi. Laporan singkat + daftar file (Bahasa Indonesia).', `Tugas: ${userTask.slice(0, 800)}\n\n${results.join('\n').slice(0, 4000)}`, 800)
       collectFrom('manager', summary)
       updateAgent('manager', { status: 'done', lastMessage: summary.slice(0, 80) + '...', currentTask: 'Selesai' })
       addMessage('Budi (Manager)', summary)
