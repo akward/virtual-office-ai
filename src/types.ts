@@ -26,6 +26,15 @@ export interface AppConfig {
   model: string
 }
 
+export interface GitHubSettings {
+  token: string
+  owner: string
+  repo: string
+  branch: string
+  connected: boolean
+  repoFullName: string
+}
+
 export interface Artifact {
   id: string
   filename: string
