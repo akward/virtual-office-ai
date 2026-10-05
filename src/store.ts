@@ -65,7 +65,7 @@ export const useStore = create<Store>((set, get) => ({
   config: {
     apiKey: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_api_key') || '' : '',
     baseUrl: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_base_url') || 'https://api.groq.com/openai/v1' : 'https://api.groq.com/openai/v1',
-    model: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_model') || 'llama-3.3-70b-versatile' : 'llama-3.3-70b-versatile',
+    model: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_model') || 'openai/gpt-oss-120b' : 'openai/gpt-oss-120b',
   },
   github: loadGH(),
 
