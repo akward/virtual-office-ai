@@ -59,6 +59,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); co
 .check-row { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; font-size: 0.78rem; color: var(--text); cursor: pointer; line-height: 1.4; }
 .check-row input { margin-top: 2px; accent-color: var(--accent); }
 .link-btn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: inherit; padding: 0; text-decoration: underline; }
+.create-repo-box { margin-top: 10px; padding: 10px; border: 1px dashed #3b4261; border-radius: 8px; background: rgba(122, 162, 247, 0.06); }
 .messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 .msg { font-size: 0.82rem; line-height: 1.45; }
 .msg-from { font-weight: 600; color: var(--accent); margin-bottom: 2px; }
