@@ -59,8 +59,8 @@ function Office() {
 function SidePanel() {
   const {
     agents, messages, artifacts, config, github, repos,
-    isRunning, isPushing, isLoadingRepos,
-    setConfig, setGithub, connectWithToken, selectRepo, loadContext,
+    isRunning, isPushing, isLoadingRepos, isCreatingRepo,
+    setConfig, setGithub, connectWithToken, selectRepo, createNewRepo, loadContext,
     runTask, clearArtifacts, pushArtifactsToGithub, addMessage,
   } = useStore()
   const [task, setTask] = useState('')
@@ -70,6 +70,8 @@ function SidePanel() {
   const [tab, setTab] = useState<'log' | 'files'>('log')
   const [localBusy, setLocalBusy] = useState(false)
   const [repoFilter, setRepoFilter] = useState('')
+  const [newRepoName, setNewRepoName] = useState('')
+  const [newRepoPrivate, setNewRepoPrivate] = useState(false)
   const filteredRepos = repos.filter((r) => !repoFilter || r.full_name.toLowerCase().includes(repoFilter.toLowerCase()))
 
   const handleRun = () => {
@@ -77,6 +79,15 @@ function SidePanel() {
     setTab('log')
     runTask(task.trim())
     setTask('')
+  }
+
+  const handleCreateRepo = async () => {
+    try {
+      await createNewRepo(newRepoName, { private: newRepoPrivate })
+      setNewRepoName('')
+    } catch (err: unknown) {
+      addMessage('System', err instanceof Error ? err.message : String(err))
+    }
   }
 
   return (
@@ -123,6 +134,27 @@ function SidePanel() {
             try { await connectWithToken() } catch (e: unknown) { addMessage('System', e instanceof Error ? e.message : String(e)) }
           }}>{isLoadingRepos ? 'Memuat semua repo...' : github.connected ? 'Refresh daftar repo' : 'Hubungkan & muat semua repo'}</button>
 
+          {github.token.trim() && (
+            <div className="create-repo-box">
+              <div className="config-row" style={{ marginTop: 12 }}>
+                <label>Buat repository baru</label>
+                <input
+                  value={newRepoName}
+                  onChange={(e) => setNewRepoName(e.target.value)}
+                  placeholder="nama-project-baru"
+                  onKeyDown={(e) => { if (e.key === 'Enter' && newRepoName.trim() && !isCreatingRepo) handleCreateRepo() }}
+                />
+              </div>
+              <label className="check-row" style={{ marginTop: 6 }}>
+                <input type="checkbox" checked={newRepoPrivate} onChange={(e) => setNewRepoPrivate(e.target.checked)} />
+                <span>Private repo</span>
+              </label>
+              <button className="btn-ghost" style={{ marginTop: 8 }} disabled={isCreatingRepo || !newRepoName.trim()} onClick={handleCreateRepo}>
+                {isCreatingRepo ? 'Membuat repo...' : 'Buat repo baru & pilih'}
+              </button>
+            </div>
+          )}
+
           {repos.length > 0 && (<>
             <div className="config-row" style={{ marginTop: 12 }}><label>Cari repo</label>
               <input value={repoFilter} onChange={(e) => setRepoFilter(e.target.value)} placeholder="filter nama..." />
@@ -153,7 +185,7 @@ function SidePanel() {
       <div className="panel-section">
         <h2>Berikan Tugas</h2>
         <textarea className="task-input" value={task} onChange={(e) => setTask(e.target.value)}
-          placeholder={github.repoFullName ? `Tugas untuk ${github.repoFullName}...` : 'Hubungkan GitHub & pilih repo dulu'}
+          placeholder={github.repoFullName ? `Tugas untuk ${github.repoFullName}...` : 'Hubungkan GitHub & buat/pilih repo dulu'}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleRun() }} />
         <button className="btn btn-primary" disabled={isRunning || !task.trim() || !config.apiKey || !github.repoFullName} onClick={handleRun}>
           {isRunning ? 'Agent bekerja...' : github.autoPush ? 'Jalankan + Auto Push' : 'Kirim ke Tim AI'}
@@ -182,7 +214,7 @@ function SidePanel() {
         </div>
         {tab === 'log' && (
           <div className="messages">
-            {messages.length === 0 && <div style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>1. API key LLM · 2. Token GitHub · 3. Pilih repo · 4. Kirim tugas</div>}
+            {messages.length === 0 && <div style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>1. API key · 2. Token GitHub · 3. Buat/pilih repo · 4. Kirim tugas</div>}
             {messages.map((m) => (
               <div key={m.id} className={`msg ${m.from === 'System' ? 'system' : ''}`}>
                 <div className="msg-from">{m.from}</div>
@@ -229,7 +261,7 @@ export default function App() {
       <div className="office-wrap">
         <div className="office-header">
           <h1>Virtual Office AI Pro</h1>
-          <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>All repos · Auto-push · Multi-agent</span>
+          <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>Buat repo · Auto-push · Multi-agent</span>
         </div>
         <Office />
       </div>
