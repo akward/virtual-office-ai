@@ -1,4 +1,4 @@
-/** GitHub REST helpers — list all repos, read/write files */
+/** GitHub REST helpers — list all repos, read/write files, create repo */
 
 export interface GitHubConfig {
   token: string
@@ -179,4 +179,46 @@ export async function loadProjectContext(config: GitHubConfig, maxFiles = 8): Pr
     } catch { /* empty */ }
   }
   return parts.join('\n\n')
+}
+
+/** Create a new repository under the authenticated user */
+export async function createRepo(
+  token: string,
+  name: string,
+  options?: { description?: string; private?: boolean; auto_init?: boolean }
+): Promise<RepoInfo> {
+  const clean = name.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9._-]/g, '')
+  if (!clean) throw new Error('Nama repo tidak valid')
+  if (clean.length > 100) throw new Error('Nama repo terlalu panjang (max 100)')
+
+  const res = await gh(token, '/user/repos', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: clean,
+      description: options?.description || 'Created by Virtual Office AI',
+      private: options?.private ?? false,
+      auto_init: options?.auto_init ?? true,
+      has_issues: true,
+      has_projects: false,
+      has_wiki: false,
+    }),
+  })
+  if (!res.ok) {
+    const t = await res.text()
+    if (res.status === 422) {
+      throw new Error(`Repo "${clean}" mungkin sudah ada, atau nama tidak valid. ${t.slice(0, 120)}`)
+    }
+    throw new Error(`Gagal buat repo: ${res.status} ${t.slice(0, 150)}`)
+  }
+  const r = await res.json()
+  return {
+    full_name: r.full_name,
+    name: r.name,
+    owner: r.owner?.login || r.full_name.split('/')[0],
+    private: !!r.private,
+    default_branch: r.default_branch || 'main',
+    description: r.description || '',
+    html_url: r.html_url,
+    updated_at: r.updated_at,
+  }
 }
