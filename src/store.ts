@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { Agent, AppConfig, Artifact, GitHubSettings, Message, RepoInfo } from './types'
 import { callLLM, extractArtifacts } from './llm'
-import { getAuthenticatedUser, listAllRepos, loadProjectContext, pushMany, type GitHubConfig } from './github'
+import { getAuthenticatedUser, listAllRepos, loadProjectContext, pushMany, createRepo, type GitHubConfig } from './github'
 
 const defaultAgents: Agent[] = [
   { id: 'manager', name: 'Budi', role: 'Project Manager', color: '#3b82f6', emoji: '👔', status: 'idle', currentTask: '', lastMessage: 'Siap!', x: 18, y: 42 },
@@ -37,10 +37,12 @@ interface Store {
   isRunning: boolean
   isPushing: boolean
   isLoadingRepos: boolean
+  isCreatingRepo: boolean
   setConfig: (c: Partial<AppConfig>) => void
   setGithub: (g: Partial<GitHubSettings>) => void
   connectWithToken: () => Promise<void>
   selectRepo: (fullName: string) => Promise<void>
+  createNewRepo: (name: string, opts?: { description?: string; private?: boolean }) => Promise<void>
   loadContext: () => Promise<void>
   updateAgent: (id: string, patch: Partial<Agent>) => void
   addMessage: (from: string, text: string) => void
@@ -59,6 +61,7 @@ export const useStore = create<Store>((set, get) => ({
   isRunning: false,
   isPushing: false,
   isLoadingRepos: false,
+  isCreatingRepo: false,
   config: {
     apiKey: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_api_key') || '' : '',
     baseUrl: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_base_url') || 'https://api.groq.com/openai/v1' : 'https://api.groq.com/openai/v1',
@@ -117,6 +120,35 @@ export const useStore = create<Store>((set, get) => ({
     await get().loadContext()
   },
 
+  createNewRepo: async (name: string, opts?: { description?: string; private?: boolean }) => {
+    const { github, addMessage, setGithub } = get()
+    if (!github.token.trim()) throw new Error('Isi GitHub token dulu')
+    const clean = name.trim()
+    if (!clean) throw new Error('Isi nama repository')
+    set({ isCreatingRepo: true })
+    try {
+      const repo = await createRepo(github.token, clean, {
+        description: opts?.description,
+        private: opts?.private ?? false,
+        auto_init: true,
+      })
+      set((s) => ({ repos: [repo, ...s.repos.filter((r) => r.full_name !== repo.full_name)] }))
+      setGithub({
+        connected: true,
+        username: github.username || repo.owner,
+        owner: repo.owner,
+        repo: repo.name,
+        branch: repo.default_branch || 'main',
+        repoFullName: repo.full_name,
+      })
+      addMessage('System', `Repo baru dibuat: ${repo.full_name}\n${repo.html_url}`)
+      set({ projectContext: '' })
+      addMessage('System', 'Repo masih kosong (hanya README awal). Kirim tugas agar agent menulis project.')
+    } finally {
+      set({ isCreatingRepo: false })
+    }
+  },
+
   loadContext: async () => {
     const { github, addMessage } = get()
     if (!github.token || !github.owner || !github.repo) return
@@ -158,9 +190,9 @@ export const useStore = create<Store>((set, get) => ({
       updateAgent('manager', { status: 'talking', lastMessage: plan.slice(0, 100) + '...', currentTask: 'Instruksi' })
       addMessage('Budi (Manager)', plan)
       const workers = [
-        { id: 'coder', name: 'Andi', system: `Kamu Andi, Engineer. Repo ${github.repoFullName}. WAJIB \`\`\`bahasa:path/file.ext\nkode\`\`\` Bahasa Indonesia.` },
-        { id: 'researcher', name: 'Siti', system: 'Kamu Siti. Output \`\`\`markdown:docs/analysis.md\n...\`\`\`' },
-        { id: 'writer', name: 'Rina', system: 'Kamu Rina. Output \`\`\`markdown:README.md\n...\`\`\`' },
+        { id: 'coder', name: 'Andi', system: `Kamu Andi, Engineer. Repo ${github.repoFullName}. WAJIB output code block path file. Bahasa Indonesia.` },
+        { id: 'researcher', name: 'Siti', system: 'Kamu Siti. Output markdown analysis file.' },
+        { id: 'writer', name: 'Rina', system: 'Kamu Rina. Output README.md.' },
       ]
       const results: string[] = []
       for (const w of workers) {
@@ -206,7 +238,7 @@ export const useStore = create<Store>((set, get) => ({
     try {
       const cfg: GitHubConfig = { token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' }
       const { ok, errors } = await pushMany(cfg, artifacts.map((a) => ({ path: a.filename.replace(/^\/+/, ''), content: a.content })), 'Virtual Office AI')
-      if (ok.length) addMessage('System', `✓ Push ke ${github.repoFullName}: ${ok.join(', ')}\nhttps://github.com/${github.owner}/${github.repo}`)
+      if (ok.length) addMessage('System', `Push ke ${github.repoFullName}: ${ok.join(', ')}\nhttps://github.com/${github.owner}/${github.repo}`)
       if (errors.length) addMessage('System', 'Gagal: ' + errors.join('; '))
     } finally {
       set({ isPushing: false })
