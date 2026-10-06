@@ -57,6 +57,7 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
     config, github, repos, isLoadingRepos, isCreatingRepo, isRunning,
     setConfig, setGithub, connectWithToken, selectRepo, createNewRepo, addMessage,
     connectors, setConnectors, connectGmail, powerMode, setPowerMode, runTask,
+    agentMemory, teachAgent, clearMemory,
   } = useStore()
   const [provider, setProvider] = useState<keyof typeof PROVIDERS>('groq')
   const [repoFilter, setRepoFilter] = useState('')
@@ -97,13 +98,46 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
             <input type="checkbox" checked={powerMode} onChange={(e) => setPowerMode(e.target.checked)} /> ⚡ Full Power
           </label>
         </section>
+
+        <section className="side-block">
+          <h3>Latih Agent</h3>
+          <p className="help-text">
+            Agent berpikir dulu sebelum kerja. Ajari dengan:
+            <br />« ingat bahwa jangan buat file output-* »
+            <br />« selalu bahasa Indonesia »
+            <br />« jangan lagi deploy tanpa saya minta »
+          </p>
+          <p className="help-text">
+            Memori: {agentMemory.prefs.length} preferensi, {agentMemory.lessons.length} pelajaran
+          </p>
+          {(agentMemory.prefs.length > 0 || agentMemory.lessons.length > 0) && (
+            <ul className="help-text" style={{ paddingLeft: '1.1rem', margin: '0.35rem 0' }}>
+              {agentMemory.prefs.slice(-5).map((x) => (
+                <li key={x}>📌 {x}</li>
+              ))}
+              {agentMemory.lessons.slice(-5).map((L) => (
+                <li key={L.id}>📚 {L.text}</li>
+              ))}
+            </ul>
+          )}
+          <button className="btn-ghost" type="button" onClick={() => {
+            const t = window.prompt('Pelajaran / preferensi untuk agent:')
+            if (t?.trim()) {
+              teachAgent(t.trim())
+              addMessage('System', '📚 Disimpan: ' + t.trim())
+            }
+          }}>➕ Tambah pelajaran</button>
+          <button className="btn-ghost" type="button" onClick={() => {
+            if (window.confirm('Hapus semua memori agent?')) clearMemory()
+          }}>🗑️ Reset memori</button>
+        </section>
+
         <section className="side-block">
           <h3>GitHub {github.connected && <span className="badge-ok">● @{github.username}</span>}</h3>
           <input type="password" value={github.token} onChange={(e) => setGithub({ token: e.target.value })} placeholder="ghp_..." />
           <button className="btn-ghost" disabled={isLoadingRepos || !github.token.trim()} onClick={async () => {
             try { await connectWithToken() } catch (e: unknown) { addMessage('System', String(e)) }
           }}>{isLoadingRepos ? 'Memuat...' : 'Hubungkan / Refresh'}</button>
-          <button className="btn-ghost" type="button" disabled={isRunning} onClick={() => runTask('sambungkan ke github')}>🔗 GitHub (popup)</button>
           {github.token.trim() && (<>
             <input value={repoFilter} onChange={(e) => setRepoFilter(e.target.value)} placeholder="Filter repo..." />
             <select value={github.repoFullName} onChange={async (e) => {
@@ -125,6 +159,7 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
             </label>
           </>)}
         </section>
+
         <section className="side-block">
           <h3>Konektor</h3>
           <input type="text" value={connectors.gmailClientId} onChange={(e) => setConnectors({ gmailClientId: e.target.value })} placeholder="Gmail OAuth Client ID" />
@@ -133,8 +168,6 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
           }}>{connectors.gmailAccessToken ? 'Reconnect Gmail' : 'Hubungkan Gmail'}</button>
           <input type="password" value={connectors.telegramBotToken} onChange={(e) => setConnectors({ telegramBotToken: e.target.value })} placeholder="Telegram bot token" />
           <input type="text" value={connectors.telegramChatId} onChange={(e) => setConnectors({ telegramChatId: e.target.value })} placeholder="Telegram chat ID" />
-          <input type="password" value={connectors.slackWebhookUrl} onChange={(e) => setConnectors({ slackWebhookUrl: e.target.value })} placeholder="Slack webhook" />
-          <input type="password" value={connectors.discordWebhookUrl} onChange={(e) => setConnectors({ discordWebhookUrl: e.target.value })} placeholder="Discord webhook" />
         </section>
       </div>
     </aside>
@@ -165,13 +198,13 @@ function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) 
       </div>
       <div className="chat-compose">
         <textarea value={task} onChange={(e) => setTask(e.target.value)}
-          placeholder={github.repoFullName ? `Tugas untuk ${github.repoFullName}…` : 'Contoh: buat dashboard · sambungkan ke vercel'}
+          placeholder={github.repoFullName ? `Tugas untuk ${github.repoFullName}…` : 'ingat bahwa ... · buat dashboard · deploy ke vercel'}
           rows={3}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleRun() }} />
         <button className="btn btn-primary" disabled={isRunning || !task.trim()} onClick={handleRun}>
           {isRunning ? 'Agent bekerja...' : powerMode ? '⚡ Jalankan' : 'Kirim'}
         </button>
-        <p className="help-text">Ctrl+Enter untuk kirim</p>
+        <p className="help-text">Ctrl+Enter · Agent berpikir dulu sebelum kerja</p>
       </div>
       <div className="tabs">
         <button type="button" className={tab === 'log' ? 'active' : ''} onClick={() => setTab('log')}>Log</button>
@@ -228,7 +261,7 @@ export default function App() {
       <main className="main-stage">
         <div className="office-header">
           <h1>Virtual Office AI</h1>
-          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings kiri · Chat kanan · Office tengah'}</p>
+          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings kiri · Chat kanan · Agent berpikir dulu'}</p>
         </div>
         <OfficeFloor />
       </main>
