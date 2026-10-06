@@ -20,10 +20,24 @@ export interface Message {
   timestamp: number
 }
 
+export interface Artifact {
+  id: string
+  filename: string
+  language: string
+  content: string
+  agentId: string
+  createdAt: number
+  action?: 'upsert' | 'delete'
+}
+
 export interface AppConfig {
   apiKey: string
   baseUrl: string
   model: string
+  apiKey2: string
+  baseUrl2: string
+  model2: string
+  vercelToken: string
 }
 
 export interface GitHubSettings {
@@ -45,14 +59,4 @@ export interface RepoInfo {
   private: boolean
   html_url: string
   description: string | null
-}
-
-export interface Artifact {
-  id: string
-  filename: string
-  language: string
-  content: string
-  agentId: string
-  createdAt: number
-  action?: 'upsert' | 'delete'
 }
