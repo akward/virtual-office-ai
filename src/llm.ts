@@ -165,15 +165,15 @@ export const PROVIDERS = {
     help: 'Primary cepat. Isi API Key #2 (OpenRouter/Gemini) untuk multi-model.',
   },
   gemini: {
-    name: 'Google Gemini',
+    name: 'Google AI Studio',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    models: ['gemini-2.0-flash', 'gemini-2.5-flash'],
-    help: 'https://aistudio.google.com/apikey',
+    models: ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'],
+    help: 'https://aistudio.google.com/apikey — pakai model gemini-3.8-flash',
   },
   openrouter: {
     name: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
-    models: ['google/gemini-2.0-flash-exp:free', 'openai/gpt-oss-120b:free'],
+    models: ['openrouter/free', 'google/gemini-2.0-flash-exp:free', 'openai/gpt-oss-120b:free'],
     help: 'https://openrouter.ai — model :free',
   },
   custom: {
