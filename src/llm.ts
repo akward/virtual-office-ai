@@ -14,14 +14,14 @@ export async function callLLM(
   config: AppConfig,
   systemPrompt: string,
   userMessage: string,
-  maxTokens = 1200
+  maxTokens = 2000
 ): Promise<string> {
   if (!config.apiKey) {
     throw new Error('API Key belum diisi. Isi dulu di Settings.')
   }
 
-  const sys = systemPrompt.length > 2500 ? systemPrompt.slice(0, 2500) + '\n…' : systemPrompt
-  const usr = userMessage.length > 6000 ? userMessage.slice(0, 6000) + '\n…' : userMessage
+  const sys = systemPrompt.length > 4000 ? systemPrompt.slice(0, 4000) + '\n…' : systemPrompt
+  const usr = userMessage.length > 12000 ? userMessage.slice(0, 12000) + '\n…' : userMessage
 
   const maxAttempts = 5
   let lastErr = ''
@@ -39,8 +39,8 @@ export async function callLLM(
           { role: 'system', content: sys },
           { role: 'user', content: usr },
         ],
-        temperature: 0.5,
-        max_tokens: Math.min(maxTokens, 1500),
+        temperature: 0.45,
+        max_tokens: Math.min(maxTokens, 2500),
       }),
     })
 
@@ -59,7 +59,7 @@ export async function callLLM(
         continue
       }
       throw new Error(
-        `Rate limit Groq (TPM). Sudah dicoba ${maxAttempts}x. Tunggu 1–2 menit lalu kirim lagi, atau ganti model ke openai/gpt-oss-20b. Detail: ${lastErr}`
+        `Rate limit. Sudah dicoba ${maxAttempts}x. Tunggu 1–2 menit atau ganti model. Detail: ${lastErr}`
       )
     }
 
@@ -69,7 +69,7 @@ export async function callLLM(
   throw new Error(`LLM gagal setelah retry: ${lastErr}`)
 }
 
-export async function paceBetweenAgents(ms = 12000): Promise<void> {
+export async function paceBetweenAgents(ms = 10000): Promise<void> {
   await sleep(ms)
 }
 
@@ -119,9 +119,9 @@ function inferFilename(lang: string, content: string, agentId: string, i: number
   if (c.includes('"name"') && c.includes('"dependencies"')) return 'package.json'
   if (c.startsWith('# ') && (c.includes('readme') || agentId === 'writer')) return 'README.md'
   if (lang === 'md' || lang === 'markdown') {
-    return agentId === 'researcher' ? 'docs/analysis.md' : 'README.md'
+    return agentId === 'researcher' ? 'docs/analysis.md' : agentId === 'security' ? 'docs/security-review.md' : 'README.md'
   }
-  if (lang === 'yml' || lang === 'yaml' || c.includes('theme:') || c.includes('jekyll')) return '_config.yml'
+  if (lang === 'yml' || lang === 'yaml') return '_config.yml'
   if (lang === 'py' || lang === 'python') return 'main.py'
   return `output-${agentId}-${i}.${langToExt(lang)}`
 }
@@ -236,7 +236,7 @@ export const PROVIDERS = {
       'llama-3.1-8b-instant',
       'llama-3.3-70b-versatile',
     ],
-    help: 'Free tier: pakai openai/gpt-oss-20b (paling sering tersedia). Llama sering 404. App auto-retry + jeda antar agent.',
+    help: 'Full Power: openai/gpt-oss-20b atau 120b. Auto-retry + jeda antar agent.',
   },
   gemini: {
     name: 'Google Gemini',
