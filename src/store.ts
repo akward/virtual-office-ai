@@ -1,13 +1,14 @@
 import { create } from 'zustand'
 import type { Agent, AppConfig, Artifact, GitHubSettings, Message, RepoInfo } from './types'
 import { callLLM, extractArtifacts, paceBetweenAgents } from './llm'
-import { getAuthenticatedUser, listAllRepos, loadProjectContext, pushMany, createRepo, listRepoFiles, deleteManyFiles, type GitHubConfig } from './github'
+import { getAuthenticatedUser, listAllRepos, loadProjectContext, pushMany, createRepo, listRepoFiles, deleteManyFiles, emptyRepoBranch, type GitHubConfig } from './github'
 
 const defaultAgents: Agent[] = [
   { id: 'manager', name: 'Budi', role: 'Project Manager', color: '#3b82f6', emoji: '👔', status: 'idle', currentTask: '', lastMessage: 'Siap!', x: 18, y: 42 },
   { id: 'coder', name: 'Andi', role: 'Software Engineer', color: '#22c55e', emoji: '💻', status: 'idle', currentTask: '', lastMessage: 'Siap!', x: 42, y: 38 },
   { id: 'researcher', name: 'Siti', role: 'Researcher', color: '#a855f7', emoji: '🔍', status: 'idle', currentTask: '', lastMessage: 'Siap!', x: 66, y: 42 },
   { id: 'writer', name: 'Rina', role: 'Content Writer', color: '#f59e0b', emoji: '✍️', status: 'idle', currentTask: '', lastMessage: 'Siap!', x: 30, y: 68 },
+  { id: 'security', name: 'Doni', role: 'Security Analyst', color: '#ef4444', emoji: '🛡️', status: 'idle', currentTask: '', lastMessage: 'Siap amankan!', x: 55, y: 62 },
 ]
 
 function loadGH(): GitHubSettings {
@@ -260,14 +261,27 @@ export const useStore = create<Store>((set, get) => ({
             files.slice(0, 40).join(', ') +
             (files.length > 40 ? ` ... (+${files.length - 40})` : '')
         )
-        addMessage('System', `Menjalankan hapus massal ${files.length} file ke GitHub (satu per satu)...`)
-        updateAgent('coder', { status: 'working', currentTask: `Hapus 0/${files.length}` })
-        const { deleted, errors } = await deleteManyFiles(cfgNow, files, 'Virtual Office AI: hapus')
+        addMessage('System', `Mengosongkan repo (${files.length} file) via empty-tree commit...`)
+        updateAgent('coder', { status: 'working', currentTask: 'Empty tree...' })
+        updateAgent('security', { status: 'working', currentTask: 'Audit hapus...' })
+        let deleted: string[] = []
+        let errors: string[] = []
+        try {
+          await emptyRepoBranch(cfgNow, `Virtual Office AI: hapus semua ${files.length} file`)
+          deleted = files
+          addMessage('System', 'Empty-tree commit berhasil.')
+        } catch (e1: unknown) {
+          addMessage('System', 'Empty-tree gagal: ' + (e1 instanceof Error ? e1.message : String(e1)) + ' — fallback...')
+          const r = await deleteManyFiles(cfgNow, files, 'Virtual Office AI: hapus')
+          deleted = r.deleted
+          errors = r.errors
+        }
+        updateAgent('security', { status: 'done', lastMessage: `Audit: ${deleted.length} dihapus`, currentTask: 'Selesai' })
         if (deleted.length) {
-          addMessage('System', `Berhasil dihapus (${deleted.length}): ${deleted.slice(0, 30).join(', ')}${deleted.length > 30 ? '...' : ''}`)
+          addMessage('System', `Berhasil dihapus (${deleted.length})`)
         }
         if (errors.length) {
-          addMessage('System', `Gagal hapus (${errors.length}): ${errors.slice(0, 10).join('; ')}`)
+          addMessage('System', `Gagal hapus (${errors.length}): ${errors.slice(0, 8).join('; ')}`)
         }
         const remaining = await listRepoFiles(cfgNow, 500)
         updateAgent('manager', {
@@ -288,24 +302,6 @@ export const useStore = create<Store>((set, get) => ({
         setTimeout(() => get().agents.forEach((a) => get().updateAgent(a.id, { status: 'idle', currentTask: '' })), 4000)
       }
       return
-    }
-
-    const explicit = detectExplicitDeletes(userTask)
-    if (explicit.length && /^(delete|hapus|remove)/i.test(userTask.trim()) && userTask.length < 500) {
-      const onlyDelete = !/(buat|create|tulis|update|tambah|fix)/i.test(userTask)
-      if (onlyDelete) {
-        addMessage('System', `Menghapus file: ${explicit.join(', ')}`)
-        try {
-          const { deleted, errors } = await deleteManyFiles(cfgNow, explicit, 'Virtual Office AI: hapus')
-          if (deleted.length) addMessage('System', 'Terhapus: ' + deleted.join(', '))
-          if (errors.length) addMessage('System', 'Gagal: ' + errors.join('; '))
-        } catch (e: unknown) {
-          addMessage('System', 'Gagal: ' + (e instanceof Error ? e.message : String(e)))
-        } finally {
-          set({ isRunning: false })
-        }
-        return
-      }
     }
 
     const collectFrom = (agentId: string, text: string) => {
@@ -329,7 +325,7 @@ export const useStore = create<Store>((set, get) => ({
       updateAgent('manager', { status: 'thinking', currentTask: 'Merencanakan...' })
       const plan = await callLLM(
         config,
-        `Kamu Budi, PM. Bahasa Indonesia. Target: ${github.repoFullName}. Format: ## Analisis ## Rencana ## Penugasan ## File ## Hapus.`,
+        `Kamu Budi, PM. Bahasa Indonesia. Target: ${github.repoFullName}. Libatkan Security (Doni). Format: ## Analisis ## Rencana ## Penugasan ## File ## Keamanan.`,
         userTask + contextBlock,
         900
       )
@@ -342,7 +338,7 @@ export const useStore = create<Store>((set, get) => ({
         {
           id: 'coder',
           name: 'Andi',
-          system: `Kamu Andi, Engineer. Repo ${github.repoFullName}. Format file: \`\`\`html:index.html ... \`\`\`. Hapus: DELETE: path atau \`\`\`delete:path\`\`\``,
+          system: `Kamu Andi, Software Engineer. Repo ${github.repoFullName}. Format: \`\`\`html:index.html ... \`\`\``,
         },
         {
           id: 'researcher',
@@ -353,6 +349,11 @@ export const useStore = create<Store>((set, get) => ({
           id: 'writer',
           name: 'Rina',
           system: `Kamu Rina. Output \`\`\`md:README.md\`\`\``,
+        },
+        {
+          id: 'security',
+          name: 'Doni',
+          system: `Kamu Doni, Security Analyst. Repo ${github.repoFullName}. Audit XSS, injection, secret, auth, CORS. Output: \`\`\`md:docs/security-review.md\n# Security Review\n## Temuan\n## Risiko\n## Rekomendasi\n\`\`\` Bahasa Indonesia.`,
         },
       ]
       const results: string[] = []
@@ -386,7 +387,7 @@ export const useStore = create<Store>((set, get) => ({
       updateAgent('manager', { status: 'thinking', currentTask: 'Laporan...' })
       const summary = await callLLM(
         config,
-        'Kamu Budi. Laporan singkat (Bahasa Indonesia).',
+        'Kamu Budi. Laporan singkat + status keamanan (Bahasa Indonesia).',
         `Tugas: ${userTask.slice(0, 800)}\n\n${results.join('\n').slice(0, 4000)}`,
         800
       )
