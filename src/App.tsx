@@ -97,14 +97,15 @@ function SidePanel() {
           <input type="password" value={config.apiKey} onChange={(e) => setConfig({ apiKey: e.target.value })} placeholder="API Key #1 (utama)" />
           <input value={config.model} onChange={(e) => setConfig({ model: e.target.value })} placeholder="Model #1" />
           <p className="help-text">{PROVIDERS[provider]?.help}</p>
-          <label className="field-label">API Key #2 (multi-model / fallback)</label>
-          <input type="password" value={config.apiKey2 || ''} onChange={(e) => setConfig({ apiKey2: e.target.value })} placeholder="OpenRouter / Gemini key" />
+          <label className="field-label">API Key #2 (OpenRouter / multi-model)</label>
+          <input type="password" value={config.apiKey2 || ''} onChange={(e) => setConfig({ apiKey2: e.target.value })} placeholder="sk-or-v1-..." />
           <input value={config.baseUrl2 || ''} onChange={(e) => setConfig({ baseUrl2: e.target.value })} placeholder="https://openrouter.ai/api/v1" />
           <input value={config.model2 || ''} onChange={(e) => setConfig({ model2: e.target.value })} placeholder="google/gemini-2.0-flash-exp:free" />
-          <p className="help-text">Dua model berpikir bersama (Full Power). Fallback jika #1 rate-limit.</p>
-          <label className="field-label">Vercel Token (deploy gratis otomatis)</label>
+          <button className="btn-ghost" type="button" disabled={isRunning} onClick={() => runTask('sambungkan ke openrouter')}>🔗 Sambungkan OpenRouter (popup)</button>
+          <label className="field-label">Vercel Token</label>
           <input type="password" value={config.vercelToken || ''} onChange={(e) => setConfig({ vercelToken: e.target.value })} placeholder="vercel_..." />
-          <p className="help-text">vercel.com → Settings → Tokens. Setelah agent selesai, app bisa online otomatis.</p>
+          <button className="btn-ghost" type="button" disabled={isRunning} onClick={() => runTask('sambungkan ke vercel')}>🔗 Sambungkan Vercel (popup)</button>
+          <p className="help-text">Agent buka popup → Anda buat token → tempel → kembali ke agent.</p>
         </>)}
       </div>
 
@@ -118,6 +119,7 @@ function SidePanel() {
           <button className="btn-ghost" disabled={isLoadingRepos || !github.token.trim()} onClick={async () => {
             try { await connectWithToken() } catch (e: unknown) { addMessage('System', String(e)) }
           }}>{isLoadingRepos ? 'Memuat...' : 'Hubungkan / Refresh'}</button>
+          <button className="btn-ghost" type="button" disabled={isRunning} onClick={() => runTask('sambungkan ke github')}>🔗 Sambungkan GitHub (popup)</button>
           {github.token.trim() && (<>
             <input value={repoFilter} onChange={(e) => setRepoFilter(e.target.value)} placeholder="Filter repo..." />
             <select value={github.repoFullName} onChange={async (e) => {
@@ -143,29 +145,24 @@ function SidePanel() {
 
       <div className="panel-section">
         <h2>Konektor</h2>
-        <p className="help-text"><code>SEND_TELEGRAM: pesan</code> · <code>SEND_EMAIL: to | subject | body</code></p>
         <input type="text" value={connectors.gmailClientId} onChange={(e) => setConnectors({ gmailClientId: e.target.value })} placeholder="Gmail OAuth Client ID" />
-        <div className="row-actions">
-          <button className="btn-ghost" disabled={!connectors.gmailClientId.trim()} onClick={async () => {
-            try { await connectGmail() } catch (e: unknown) { alert(String(e)) }
-          }}>{connectors.gmailAccessToken ? 'Reconnect Gmail' : 'Hubungkan Gmail'}</button>
-          {connectors.gmailAccessToken && <span className="badge-ok">● {connectors.gmailEmail || 'OK'}</span>}
-        </div>
+        <button className="btn-ghost" disabled={!connectors.gmailClientId.trim()} onClick={async () => {
+          try { await connectGmail() } catch (e: unknown) { alert(String(e)) }
+        }}>{connectors.gmailAccessToken ? 'Reconnect Gmail' : 'Hubungkan Gmail'}</button>
         <input type="password" value={connectors.telegramBotToken} onChange={(e) => setConnectors({ telegramBotToken: e.target.value })} placeholder="Telegram bot token" />
         <input type="text" value={connectors.telegramChatId} onChange={(e) => setConnectors({ telegramChatId: e.target.value })} placeholder="Telegram chat ID" />
-        <input type="password" value={connectors.slackWebhookUrl} onChange={(e) => setConnectors({ slackWebhookUrl: e.target.value })} placeholder="Slack webhook" />
-        <input type="password" value={connectors.discordWebhookUrl} onChange={(e) => setConnectors({ discordWebhookUrl: e.target.value })} placeholder="Discord webhook" />
       </div>
 
       <div className="panel-section">
         <h2>Tugas</h2>
         <label className="row-actions">
           <input type="checkbox" checked={powerMode} onChange={(e) => setPowerMode(e.target.checked)} />
-          <span>⚡ Full Power + multi-API + riset online</span>
+          <span>⚡ Full Power</span>
         </label>
-        <textarea value={task} onChange={(e) => setTask(e.target.value)} placeholder={github.repoFullName ? 'Contoh: buat dashboard realisasi anggaran online' : 'Hubungkan GitHub dulu'} rows={3}
+        <textarea value={task} onChange={(e) => setTask(e.target.value)}
+          placeholder="Contoh: sambungkan ke vercel  ·  buat dashboard anggaran online" rows={3}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleRun() }} />
-        <button className="btn btn-primary" disabled={isRunning || !task.trim() || !config.apiKey || !github.repoFullName} onClick={handleRun}>
+        <button className="btn btn-primary" disabled={isRunning || !task.trim()} onClick={handleRun}>
           {isRunning ? 'Agent bekerja...' : '⚡ Jalankan'}
         </button>
       </div>
@@ -211,7 +208,7 @@ export default function App() {
       <div className="office-wrap">
         <div className="office-header">
           <h1>Virtual Office AI</h1>
-          <p>Multi-API · Riset online · Hosting otonom · Konektor</p>
+          <p>Popup connect · Multi-API · Deploy</p>
         </div>
         <OfficeFloor />
       </div>
