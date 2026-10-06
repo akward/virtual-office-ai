@@ -60,3 +60,15 @@ export interface RepoInfo {
   html_url: string
   description: string | null
 }
+
+/** Preferensi & pelajaran yang diajarkan user ke agent */
+export interface AgentLesson {
+  id: string
+  text: string
+  createdAt: number
+}
+
+export interface AgentMemory {
+  lessons: AgentLesson[]
+  prefs: string[]
+}
