@@ -1,4 +1,4 @@
-/** GitHub REST helpers — list repos, atomic multi-file commit, create repo */
+/** GitHub REST helpers — list repos, atomic multi-file commit, create/delete */
 
 export type GitHubConfig = {
   token: string
@@ -179,41 +179,82 @@ export async function putFile(
   return { html_url: data.content?.html_url || data.commit?.html_url }
 }
 
-/** Atomic multi-file commit via Git Data API */
+export async function listRepoFiles(config: GitHubConfig, max = 200): Promise<string[]> {
+  const base = `/repos/${config.owner}/${config.repo}`
+  const branch = config.branch || 'main'
+  try {
+    const ref = await ghJson<{ object: { sha: string } }>(config.token, `${base}/git/ref/heads/${branch}`)
+    const commit = await ghJson<{ tree: { sha: string } }>(config.token, `${base}/git/commits/${ref.object.sha}`)
+    const tree = await ghJson<{ tree: { path: string; type: string }[]; truncated: boolean }>(
+      config.token,
+      `${base}/git/trees/${commit.tree.sha}?recursive=1`
+    )
+    return (tree.tree || []).filter((t) => t.type === 'blob').map((t) => t.path).slice(0, max)
+  } catch {
+    try {
+      const list = await listDir(config, '')
+      return list.filter((x) => x.type === 'file').map((x) => x.path).slice(0, max)
+    } catch {
+      return []
+    }
+  }
+}
+
+export async function deleteFile(config: GitHubConfig, path: string, message: string): Promise<void> {
+  const cleanPath = path.replace(/^\/+/, '').trim()
+  if (!cleanPath) throw new Error('Path kosong')
+  const existing = await getFile(config, cleanPath)
+  if (!existing?.sha) throw new Error(`File tidak ada: ${cleanPath}`)
+  const encoded = cleanPath.split('/').map(encodeURIComponent).join('/')
+  await ghJson(config.token, `/repos/${config.owner}/${config.repo}/contents/${encoded}`, {
+    method: 'DELETE',
+    body: JSON.stringify({
+      message: message.slice(0, 200),
+      sha: existing.sha,
+      branch: config.branch || 'main',
+    }),
+  })
+}
+
 export async function pushMany(
   config: GitHubConfig,
-  files: { path: string; content: string }[],
+  files: { path: string; content: string; action?: 'upsert' | 'delete' }[],
   messagePrefix: string
-): Promise<{ ok: string[]; errors: string[] }> {
-  const map = new Map<string, string>()
+): Promise<{ ok: string[]; errors: string[]; deleted: string[] }> {
+  const upserts = new Map<string, string>()
+  const deletes = new Set<string>()
+
   for (const f of files) {
     const p = f.path.replace(/^\/+/, '').trim()
-    if (!p || f.content == null || f.content === '') continue
-    map.set(p, f.content)
+    if (!p) continue
+    if (f.action === 'delete') {
+      deletes.add(p)
+      upserts.delete(p)
+    } else if (f.content != null && f.content !== '') {
+      upserts.set(p, f.content)
+      deletes.delete(p)
+    }
   }
-  if (map.size === 0) return { ok: [], errors: ['Tidak ada file valid'] }
+
+  if (upserts.size === 0 && deletes.size === 0) {
+    return { ok: [], errors: ['Tidak ada perubahan'], deleted: [] }
+  }
 
   const base = `/repos/${config.owner}/${config.repo}`
   const branch = config.branch || 'main'
+  const ok: string[] = []
+  const deleted: string[] = []
+  const errors: string[] = []
 
   try {
-    const ref = await ghJson<{ object: { sha: string } }>(
-      config.token,
-      `${base}/git/ref/heads/${branch}`
-    )
+    const ref = await ghJson<{ object: { sha: string } }>(config.token, `${base}/git/ref/heads/${branch}`)
     const latestCommitSha = ref.object.sha
-
-    const commit = await ghJson<{ tree: { sha: string } }>(
-      config.token,
-      `${base}/git/commits/${latestCommitSha}`
-    )
+    const commit = await ghJson<{ tree: { sha: string } }>(config.token, `${base}/git/commits/${latestCommitSha}`)
     const baseTreeSha = commit.tree.sha
 
-    const treeItems: { path: string; mode: string; type: string; sha: string }[] = []
-    const ok: string[] = []
-    const errors: string[] = []
+    const treeItems: { path: string; mode: string; type: string; sha: string | null }[] = []
 
-    for (const [path, content] of map) {
+    for (const [path, content] of upserts) {
       try {
         const blob = await ghJson<{ sha: string }>(config.token, `${base}/git/blobs`, {
           method: 'POST',
@@ -221,14 +262,19 @@ export async function pushMany(
         })
         treeItems.push({ path, mode: '100644', type: 'blob', sha: blob.sha })
         ok.push(path)
-        await sleep(200)
+        await sleep(150)
       } catch (e: unknown) {
         errors.push(`${path}: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
 
+    for (const path of deletes) {
+      treeItems.push({ path, mode: '100644', type: 'blob', sha: null })
+      deleted.push(path)
+    }
+
     if (treeItems.length === 0) {
-      return { ok: [], errors: errors.length ? errors : ['Semua blob gagal'] }
+      return { ok: [], errors: errors.length ? errors : ['Tidak ada item tree'], deleted: [] }
     }
 
     const newTree = await ghJson<{ sha: string }>(config.token, `${base}/git/trees`, {
@@ -236,9 +282,11 @@ export async function pushMany(
       body: JSON.stringify({ base_tree: baseTreeSha, tree: treeItems }),
     })
 
-    const msg =
-      `${messagePrefix}: ${treeItems.length} file` +
-      (errors.length ? ` (${errors.length} gagal)` : '')
+    const msgParts: string[] = []
+    if (ok.length) msgParts.push(`+${ok.length} file`)
+    if (deleted.length) msgParts.push(`-${deleted.length} hapus`)
+    const msg = `${messagePrefix}: ${msgParts.join(', ') || 'update'}`
+
     const newCommit = await ghJson<{ sha: string }>(config.token, `${base}/git/commits`, {
       method: 'POST',
       body: JSON.stringify({
@@ -253,44 +301,59 @@ export async function pushMany(
       body: JSON.stringify({ sha: newCommit.sha }),
     })
 
-    if (errors.length) {
-      for (const err of [...errors]) {
-        const path = err.split(':')[0]
-        const content = map.get(path)
-        if (!content) continue
-        try {
-          await sleep(500)
-          await putFile(config, path, content, `${messagePrefix}: ${path}`)
-          ok.push(path)
-          const idx = errors.indexOf(err)
-          if (idx >= 0) errors.splice(idx, 1)
-        } catch {
-          /* keep */
-        }
+    for (const err of [...errors]) {
+      const path = err.split(':')[0]
+      const content = upserts.get(path)
+      if (!content) continue
+      try {
+        await sleep(400)
+        await putFile(config, path, content, `${messagePrefix}: ${path}`)
+        ok.push(path)
+        const idx = errors.indexOf(err)
+        if (idx >= 0) errors.splice(idx, 1)
+      } catch {
+        /* keep */
       }
     }
 
-    return { ok, errors }
+    return { ok, errors, deleted }
   } catch (e: unknown) {
-    const ok: string[] = []
-    const errors: string[] = []
-    for (const [path, content] of map) {
+    for (const [path, content] of upserts) {
       try {
         await putFile(config, path, content, `${messagePrefix}: ${path}`)
         ok.push(path)
       } catch (err: unknown) {
         errors.push(`${path}: ${err instanceof Error ? err.message : String(err)}`)
       }
-      await sleep(400)
+      await sleep(350)
     }
-    if (ok.length === 0 && errors.length === 0) {
+    for (const path of deletes) {
+      try {
+        await deleteFile(config, path, `${messagePrefix}: hapus ${path}`)
+        deleted.push(path)
+      } catch (err: unknown) {
+        errors.push(`hapus ${path}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      await sleep(350)
+    }
+    if (ok.length === 0 && deleted.length === 0 && errors.length === 0) {
       errors.push(e instanceof Error ? e.message : String(e))
     }
-    return { ok, errors }
+    return { ok, errors, deleted }
   }
 }
 
 export async function loadProjectContext(config: GitHubConfig, maxFiles = 8): Promise<string> {
+  const parts: string[] = []
+  try {
+    const all = await listRepoFiles(config, 150)
+    if (all.length) {
+      parts.push('--- DAFTAR FILE DI REPO (bisa di-update/hapus) ---\n' + all.join('\n'))
+    }
+  } catch {
+    /* ignore */
+  }
+
   const candidates = [
     'README.md',
     'readme.md',
@@ -301,21 +364,20 @@ export async function loadProjectContext(config: GitHubConfig, maxFiles = 8): Pr
     'src/App.tsx',
     'src/main.tsx',
   ]
-  const parts: string[] = []
   let count = 0
   for (const path of candidates) {
     if (count >= maxFiles) break
     try {
       const f = await getFile(config, path)
       if (f) {
-        parts.push(`--- FILE: ${f.path} ---\n${f.content.slice(0, 4000)}`)
+        parts.push(`--- FILE: ${f.path} ---\n${f.content.slice(0, 3500)}`)
         count++
       }
     } catch {
       /* skip */
     }
   }
-  if (!parts.length) {
+  if (parts.length <= 1) {
     try {
       const list = await listDir(config, '')
       parts.push('--- Struktur root ---\n' + list.map((x) => `${x.type}: ${x.path}`).join('\n'))
