@@ -17,7 +17,7 @@ export type RepoInfo = {
   description: string | null
 }
 
-async function gh(token: string, path: string, init: RequestInit = {}): Promise<Response> {
+async function gh(token: string, path: string, init: RequestInit = {}, timeoutMs = 20000): Promise<Response> {
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github+json',
     Authorization: `Bearer ${token}`,
@@ -27,7 +27,22 @@ async function gh(token: string, path: string, init: RequestInit = {}): Promise<
   if (init.body && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json'
   }
-  return fetch(`https://api.github.com${path}`, { ...init, headers })
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    return await fetch(`https://api.github.com${path}`, {
+      ...init,
+      headers,
+      signal: ctrl.signal,
+    })
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === 'AbortError') {
+      throw new Error(`Timeout ${timeoutMs}ms: ${path}`)
+    }
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -36,7 +51,7 @@ async function ghJson<T = unknown>(
   token: string,
   path: string,
   init: RequestInit = {},
-  retries = 4
+  retries = 3
 ): Promise<T> {
   let lastErr = ''
   for (let i = 0; i < retries; i++) {
@@ -45,7 +60,7 @@ async function ghJson<T = unknown>(
       if (res.status === 429 || res.status === 403) {
         const t = await res.text()
         lastErr = `${res.status} ${t.slice(0, 120)}`
-        await sleep(1500 * (i + 1))
+        await sleep(1000 * (i + 1))
         continue
       }
       if (!res.ok) {
@@ -56,8 +71,8 @@ async function ghJson<T = unknown>(
       return (await res.json()) as T
     } catch (e: unknown) {
       lastErr = e instanceof Error ? e.message : String(e)
-      if (/Failed to fetch|NetworkError|429|403/i.test(lastErr) && i < retries - 1) {
-        await sleep(1200 * (i + 1))
+      if (/Failed to fetch|NetworkError|Timeout|429|403/i.test(lastErr) && i < retries - 1) {
+        await sleep(800 * (i + 1))
         continue
       }
       throw e instanceof Error ? e : new Error(lastErr)
@@ -213,40 +228,77 @@ export async function deleteFile(config: GitHubConfig, path: string, message: st
   })
 }
 
-/** Hapus banyak file satu per satu (andal untuk bulk delete di browser) */
+/** Hapus banyak file dalam 1 commit (cepat) via Git Tree API */
 export async function deleteManyFiles(
   config: GitHubConfig,
   paths: string[],
   messagePrefix = 'Virtual Office AI: hapus'
 ): Promise<{ deleted: string[]; errors: string[] }> {
-  const deleted: string[] = []
-  const errors: string[] = []
   const unique = [...new Set(paths.map((p) => p.replace(/^\/+/, '').trim()).filter(Boolean))]
+  if (!unique.length) return { deleted: [], errors: [] }
 
-  for (const path of unique) {
-    let ok = false
-    let lastErr = ''
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        if (attempt > 0) await sleep(600 * attempt)
-        await deleteFile(config, path, `${messagePrefix} ${path}`)
-        deleted.push(path)
-        ok = true
-        break
-      } catch (e: unknown) {
-        lastErr = e instanceof Error ? e.message : String(e)
-        if (/404|tidak ada|Not Found/i.test(lastErr)) {
+  const base = `/repos/${config.owner}/${config.repo}`
+  const branch = config.branch || 'main'
+
+  try {
+    const ref = await ghJson<{ object: { sha: string } }>(config.token, `${base}/git/ref/heads/${branch}`)
+    const latestCommitSha = ref.object.sha
+    const commit = await ghJson<{ tree: { sha: string } }>(
+      config.token,
+      `${base}/git/commits/${latestCommitSha}`
+    )
+    const treeItems = unique.map((path) => ({
+      path,
+      mode: '100644',
+      type: 'blob',
+      sha: null as string | null,
+    }))
+    const newTree = await ghJson<{ sha: string }>(config.token, `${base}/git/trees`, {
+      method: 'POST',
+      body: JSON.stringify({ base_tree: commit.tree.sha, tree: treeItems }),
+    })
+    const newCommit = await ghJson<{ sha: string }>(config.token, `${base}/git/commits`, {
+      method: 'POST',
+      body: JSON.stringify({
+        message: `${messagePrefix} ${unique.length} file`.slice(0, 200),
+        tree: newTree.sha,
+        parents: [latestCommitSha],
+      }),
+    })
+    await ghJson(config.token, `${base}/git/refs/heads/${branch}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ sha: newCommit.sha }),
+    })
+    return { deleted: unique, errors: [] }
+  } catch (treeErr: unknown) {
+    const deleted: string[] = []
+    const errors: string[] = [
+      `Tree-delete gagal, fallback: ${treeErr instanceof Error ? treeErr.message : String(treeErr)}`,
+    ]
+    for (const path of unique) {
+      let ok = false
+      let lastErr = ''
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          if (attempt > 0) await sleep(500 * attempt)
+          await deleteFile(config, path, `${messagePrefix} ${path}`)
           deleted.push(path)
           ok = true
           break
+        } catch (e: unknown) {
+          lastErr = e instanceof Error ? e.message : String(e)
+          if (/404|tidak ada|Not Found/i.test(lastErr)) {
+            deleted.push(path)
+            ok = true
+            break
+          }
         }
-        await sleep(400)
       }
+      if (!ok) errors.push(`${path}: ${lastErr}`)
+      await sleep(200)
     }
-    if (!ok) errors.push(`${path}: ${lastErr}`)
-    await sleep(250)
+    return { deleted, errors }
   }
-  return { deleted, errors }
 }
 
 export async function pushMany(
@@ -273,7 +325,6 @@ export async function pushMany(
     return { ok: [], errors: ['Tidak ada perubahan'], deleted: [] }
   }
 
-  // Pure deletes → sequential API (paling andal)
   if (upserts.size === 0 && deletes.size > 0) {
     const result = await deleteManyFiles(config, [...deletes], messagePrefix + ': hapus')
     return { ok: [], errors: result.errors, deleted: result.deleted }
@@ -300,7 +351,7 @@ export async function pushMany(
         })
         treeItems.push({ path, mode: '100644', type: 'blob', sha: blob.sha })
         ok.push(path)
-        await sleep(150)
+        await sleep(100)
       } catch (e: unknown) {
         errors.push(`${path}: ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -348,7 +399,7 @@ export async function pushMany(
       } catch (err: unknown) {
         errors.push(`${path}: ${err instanceof Error ? err.message : String(err)}`)
       }
-      await sleep(350)
+      await sleep(300)
     }
     if (deletes.size) {
       const r = await deleteManyFiles(config, [...deletes], messagePrefix + ': hapus')
@@ -372,7 +423,7 @@ export async function loadProjectContext(config: GitHubConfig, maxFiles = 8): Pr
   } catch {
     /* ignore */
   }
-  const candidates = ['README.md', 'readme.md', 'package.json', 'index.html', 'styles.css', 'app.js', 'src/App.tsx', 'src/main.tsx']
+  const candidates = ['README.md', 'readme.md', 'package.json', 'index.html', 'styles.css', 'app.js']
   let count = 0
   for (const path of candidates) {
     if (count >= maxFiles) break
@@ -384,14 +435,6 @@ export async function loadProjectContext(config: GitHubConfig, maxFiles = 8): Pr
       }
     } catch {
       /* skip */
-    }
-  }
-  if (parts.length <= 1) {
-    try {
-      const list = await listDir(config, '')
-      parts.push('--- Struktur root ---\n' + list.map((x) => `${x.type}: ${x.path}`).join('\n'))
-    } catch {
-      /* empty */
     }
   }
   return parts.join('\n\n')
