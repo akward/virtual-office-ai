@@ -17,7 +17,7 @@ export type RepoInfo = {
   description: string | null
 }
 
-async function gh(token: string, path: string, init: RequestInit = {}, timeoutMs = 20000): Promise<Response> {
+async function gh(token: string, path: string, init: RequestInit = {}, timeoutMs = 25000): Promise<Response> {
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github+json',
     Authorization: `Bearer ${token}`,
@@ -59,13 +59,13 @@ async function ghJson<T = unknown>(
       const res = await gh(token, path, init)
       if (res.status === 429 || res.status === 403) {
         const t = await res.text()
-        lastErr = `${res.status} ${t.slice(0, 120)}`
+        lastErr = `${res.status} ${t.slice(0, 160)}`
         await sleep(1000 * (i + 1))
         continue
       }
       if (!res.ok) {
         const t = await res.text()
-        throw new Error(`${res.status} ${t.slice(0, 200)}`)
+        throw new Error(`${res.status} ${t.slice(0, 220)}`)
       }
       if (res.status === 204) return {} as T
       return (await res.json()) as T
@@ -228,7 +228,37 @@ export async function deleteFile(config: GitHubConfig, path: string, message: st
   })
 }
 
-/** Hapus banyak file dalam 1 commit (cepat) via Git Tree API */
+/** Kosongkan branch dengan commit tree kosong — hapus semua file sekaligus */
+export async function emptyRepoBranch(
+  config: GitHubConfig,
+  message = 'Virtual Office AI: kosongkan repo'
+): Promise<void> {
+  const base = `/repos/${config.owner}/${config.repo}`
+  const branch = config.branch || 'main'
+
+  const ref = await ghJson<{ object: { sha: string } }>(config.token, `${base}/git/ref/heads/${branch}`)
+  const latestCommitSha = ref.object.sha
+
+  const emptyTree = await ghJson<{ sha: string }>(config.token, `${base}/git/trees`, {
+    method: 'POST',
+    body: JSON.stringify({ tree: [] }),
+  })
+
+  const newCommit = await ghJson<{ sha: string }>(config.token, `${base}/git/commits`, {
+    method: 'POST',
+    body: JSON.stringify({
+      message: message.slice(0, 200),
+      tree: emptyTree.sha,
+      parents: [latestCommitSha],
+    }),
+  })
+
+  await ghJson(config.token, `${base}/git/refs/heads/${branch}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ sha: newCommit.sha }),
+  })
+}
+
 export async function deleteManyFiles(
   config: GitHubConfig,
   paths: string[],
@@ -237,65 +267,46 @@ export async function deleteManyFiles(
   const unique = [...new Set(paths.map((p) => p.replace(/^\/+/, '').trim()).filter(Boolean))]
   if (!unique.length) return { deleted: [], errors: [] }
 
-  const base = `/repos/${config.owner}/${config.repo}`
-  const branch = config.branch || 'main'
+  try {
+    const all = await listRepoFiles(config, 500)
+    if (all.length > 0 && unique.length >= all.length) {
+      await emptyRepoBranch(config, `${messagePrefix} semua (${all.length} file)`)
+      return { deleted: all, errors: [] }
+    }
+  } catch {
+    /* continue */
+  }
 
   try {
-    const ref = await ghJson<{ object: { sha: string } }>(config.token, `${base}/git/ref/heads/${branch}`)
-    const latestCommitSha = ref.object.sha
-    const commit = await ghJson<{ tree: { sha: string } }>(
-      config.token,
-      `${base}/git/commits/${latestCommitSha}`
-    )
-    const treeItems = unique.map((path) => ({
-      path,
-      mode: '100644',
-      type: 'blob',
-      sha: null as string | null,
-    }))
-    const newTree = await ghJson<{ sha: string }>(config.token, `${base}/git/trees`, {
-      method: 'POST',
-      body: JSON.stringify({ base_tree: commit.tree.sha, tree: treeItems }),
-    })
-    const newCommit = await ghJson<{ sha: string }>(config.token, `${base}/git/commits`, {
-      method: 'POST',
-      body: JSON.stringify({
-        message: `${messagePrefix} ${unique.length} file`.slice(0, 200),
-        tree: newTree.sha,
-        parents: [latestCommitSha],
-      }),
-    })
-    await ghJson(config.token, `${base}/git/refs/heads/${branch}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ sha: newCommit.sha }),
-    })
+    await emptyRepoBranch(config, `${messagePrefix} ${unique.length} file`)
     return { deleted: unique, errors: [] }
-  } catch (treeErr: unknown) {
+  } catch (e: unknown) {
     const deleted: string[] = []
-    const errors: string[] = [
-      `Tree-delete gagal, fallback: ${treeErr instanceof Error ? treeErr.message : String(treeErr)}`,
-    ]
+    const errors: string[] = [`Empty-tree gagal: ${e instanceof Error ? e.message : String(e)}`]
+    const branch = config.branch || 'main'
     for (const path of unique) {
-      let ok = false
-      let lastErr = ''
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          if (attempt > 0) await sleep(500 * attempt)
-          await deleteFile(config, path, `${messagePrefix} ${path}`)
+      try {
+        const existing = await getFile(config, path)
+        if (!existing?.sha) {
           deleted.push(path)
-          ok = true
-          break
-        } catch (e: unknown) {
-          lastErr = e instanceof Error ? e.message : String(e)
-          if (/404|tidak ada|Not Found/i.test(lastErr)) {
-            deleted.push(path)
-            ok = true
-            break
-          }
+          continue
         }
+        const encoded = path.split('/').map(encodeURIComponent).join('/')
+        await ghJson(config.token, `/repos/${config.owner}/${config.repo}/contents/${encoded}`, {
+          method: 'DELETE',
+          body: JSON.stringify({
+            message: `${messagePrefix} ${path}`.slice(0, 200),
+            sha: existing.sha,
+            branch,
+          }),
+        })
+        deleted.push(path)
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (/404|Not Found/i.test(msg)) deleted.push(path)
+        else errors.push(`${path}: ${msg}`)
       }
-      if (!ok) errors.push(`${path}: ${lastErr}`)
-      await sleep(200)
+      await sleep(300)
     }
     return { deleted, errors }
   }
@@ -340,7 +351,6 @@ export async function pushMany(
     const ref = await ghJson<{ object: { sha: string } }>(config.token, `${base}/git/ref/heads/${branch}`)
     const latestCommitSha = ref.object.sha
     const commit = await ghJson<{ tree: { sha: string } }>(config.token, `${base}/git/commits/${latestCommitSha}`)
-    const baseTreeSha = commit.tree.sha
     const treeItems: { path: string; mode: string; type: string; sha: string | null }[] = []
 
     for (const [path, content] of upserts) {
@@ -351,45 +361,32 @@ export async function pushMany(
         })
         treeItems.push({ path, mode: '100644', type: 'blob', sha: blob.sha })
         ok.push(path)
-        await sleep(100)
       } catch (e: unknown) {
         errors.push(`${path}: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
-
     for (const path of deletes) {
       treeItems.push({ path, mode: '100644', type: 'blob', sha: null })
       deleted.push(path)
     }
-
-    if (treeItems.length === 0) {
-      return { ok: [], errors: errors.length ? errors : ['Tidak ada item tree'], deleted: [] }
-    }
+    if (!treeItems.length) return { ok: [], errors: errors.length ? errors : ['Kosong'], deleted: [] }
 
     const newTree = await ghJson<{ sha: string }>(config.token, `${base}/git/trees`, {
       method: 'POST',
-      body: JSON.stringify({ base_tree: baseTreeSha, tree: treeItems }),
+      body: JSON.stringify({ base_tree: commit.tree.sha, tree: treeItems }),
     })
-
-    const msgParts: string[] = []
-    if (ok.length) msgParts.push(`+${ok.length} file`)
-    if (deleted.length) msgParts.push(`-${deleted.length} hapus`)
-    const msg = `${messagePrefix}: ${msgParts.join(', ') || 'update'}`
-
     const newCommit = await ghJson<{ sha: string }>(config.token, `${base}/git/commits`, {
       method: 'POST',
       body: JSON.stringify({
-        message: msg.slice(0, 200),
+        message: `${messagePrefix}: +${ok.length}/-${deleted.length}`.slice(0, 200),
         tree: newTree.sha,
         parents: [latestCommitSha],
       }),
     })
-
     await ghJson(config.token, `${base}/git/refs/heads/${branch}`, {
       method: 'PATCH',
       body: JSON.stringify({ sha: newCommit.sha }),
     })
-
     return { ok, errors, deleted }
   } catch (e: unknown) {
     for (const [path, content] of upserts) {
@@ -399,14 +396,13 @@ export async function pushMany(
       } catch (err: unknown) {
         errors.push(`${path}: ${err instanceof Error ? err.message : String(err)}`)
       }
-      await sleep(300)
     }
     if (deletes.size) {
       const r = await deleteManyFiles(config, [...deletes], messagePrefix + ': hapus')
       deleted.push(...r.deleted)
       errors.push(...r.errors)
     }
-    if (ok.length === 0 && deleted.length === 0 && errors.length === 0) {
+    if (!ok.length && !deleted.length && !errors.length) {
       errors.push(e instanceof Error ? e.message : String(e))
     }
     return { ok, errors, deleted }
@@ -417,22 +413,15 @@ export async function loadProjectContext(config: GitHubConfig, maxFiles = 8): Pr
   const parts: string[] = []
   try {
     const all = await listRepoFiles(config, 150)
-    if (all.length) {
-      parts.push('--- DAFTAR FILE DI REPO (bisa di-update/hapus) ---\n' + all.join('\n'))
-    }
+    if (all.length) parts.push('--- DAFTAR FILE DI REPO ---\n' + all.join('\n'))
   } catch {
     /* ignore */
   }
-  const candidates = ['README.md', 'readme.md', 'package.json', 'index.html', 'styles.css', 'app.js']
-  let count = 0
-  for (const path of candidates) {
-    if (count >= maxFiles) break
+  for (const path of ['README.md', 'index.html', 'styles.css', 'app.js', 'package.json']) {
+    if (parts.length > maxFiles) break
     try {
       const f = await getFile(config, path)
-      if (f) {
-        parts.push(`--- FILE: ${f.path} ---\n${f.content.slice(0, 3500)}`)
-        count++
-      }
+      if (f) parts.push(`--- FILE: ${f.path} ---\n${f.content.slice(0, 3500)}`)
     } catch {
       /* skip */
     }
