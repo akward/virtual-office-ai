@@ -192,7 +192,7 @@ export const useStore = create<Store>((set, get) => ({
       const repo = await createRepo(github.token, name.trim(), { description: opts?.description, private: opts?.private ?? false, auto_init: true })
       set((s) => ({ repos: [repo, ...s.repos.filter((r) => r.full_name !== repo.full_name)] }))
       setGithub({ connected: true, username: github.username || repo.owner, owner: repo.owner, repo: repo.name, branch: repo.default_branch || 'main', repoFullName: repo.full_name })
-      addMessage('System', `Repo baru: ${repo.full_name}\n${repo.html_url}`)
+      addMessage('System', `Repo baru: ${repo.full_name}`)
       set({ projectContext: '' })
     } finally {
       set({ isCreatingRepo: false })
@@ -218,7 +218,7 @@ export const useStore = create<Store>((set, get) => ({
   clearArtifacts: () => set({ artifacts: [] }),
 
   runTask: async (userTask: string) => {
-    const { config, updateAgent, addMessage, addArtifacts, clearArtifacts, projectContext, github, repos } = get()
+    const { config, updateAgent, addMessage, addArtifacts, clearArtifacts, github, repos } = get()
     if (get().isRunning) return
     if (!github.connected || !github.repo) {
       addMessage('System', 'Pilih repository GitHub dulu.')
@@ -242,7 +242,6 @@ export const useStore = create<Store>((set, get) => ({
     const cfgNow: GitHubConfig = { token: ghNow.token, owner: ghNow.owner, repo: ghNow.repo, branch: ghNow.branch || 'main' }
 
     if (detectBulkDeleteAll(userTask)) {
-      updateAgent('manager', { status: 'working', currentTask: 'Hapus semua...' })
       try {
         const files = await listRepoFiles(cfgNow, 500)
         if (!files.length) {
@@ -251,15 +250,9 @@ export const useStore = create<Store>((set, get) => ({
           return
         }
         await emptyRepoBranch(cfgNow, `Virtual Office AI: hapus ${files.length} file`)
-        addMessage('System', `Terhapus ${files.length} file (empty tree).`)
+        addMessage('System', `Terhapus ${files.length} file.`)
       } catch (e: unknown) {
-        try {
-          const files = await listRepoFiles(cfgNow, 500)
-          const r = await deleteManyFiles(cfgNow, files, 'VO AI hapus')
-          addMessage('System', `Fallback hapus: ${r.deleted.length}. Err: ${r.errors.slice(0, 2).join('; ')}`)
-        } catch (e2: unknown) {
-          addMessage('System', 'Gagal hapus: ' + (e2 instanceof Error ? e2.message : String(e2)))
-        }
+        addMessage('System', 'Gagal hapus: ' + (e instanceof Error ? e.message : String(e)))
       } finally {
         set({ isRunning: false })
       }
@@ -267,7 +260,7 @@ export const useStore = create<Store>((set, get) => ({
     }
 
     try {
-      addMessage('System', 'Memuat ulang konteks repo...')
+      addMessage('System', 'Memuat konteks repo...')
       await get().loadContext()
     } catch { /* ignore */ }
 
@@ -281,7 +274,7 @@ export const useStore = create<Store>((set, get) => ({
     }
 
     try {
-      updateAgent('manager', { status: 'thinking', currentTask: 'Merencanakan full-power...' })
+      updateAgent('manager', { status: 'thinking', currentTask: 'Merencanakan...' })
       const power = get().powerMode
       const pace = power ? 10000 : 14000
       const tok = power ? 2200 : 1200
@@ -294,11 +287,18 @@ export const useStore = create<Store>((set, get) => ({
 
       const plan = await callLLM(
         config,
-        `Kamu Budi, PM senior full power. Bahasa Indonesia. Repo: ${github.repoFullName}.
+        `Kamu Budi, PM senior. Bahasa Indonesia. Repo: ${github.repoFullName}.
 Konektor: ${connInfo}.
-Aturan: pecah tugas ke Coder/Researcher/Writer/Security; path file jelas; SEND_EMAIL/TELEGRAM/SLACK jika perlu; DELETE: path untuk sampah.
-Mode ${power ? 'FULL POWER: arsitektur, edge case, keamanan' : 'standar'}.
-Format: ## Analisis ## Arsitektur ## Rencana ## Penugasan ## File ## Keamanan ## Notifikasi`,
+
+PENTING — user sering tulis tugas SINGKAT. Kamu wajib mengisi detail sendiri:
+- Anggap user ingin HASIL SIAP PAKAI (buka di browser langsung), bukan kerangka kosong.
+- Default web app: index.html + styles.css + app.js + README.md (kecuali user minta stack lain).
+- Sertakan UI rapi, data contoh, dan alur yang bisa dicoba tanpa setup rumit.
+- Tim: Andi (kode lengkap), Siti (analisis), Rina (README), Doni (security).
+- Jangan minta user menjelaskan ulang; ambil keputusan desain yang masuk akal.
+- Notifikasi hanya jika user meminta.
+Mode ${power ? 'FULL POWER' : 'standar'}.
+Format singkat: ## Analisis ## Rencana ## File wajib ## Penugasan`,
         userTask + richContext,
         power ? 1400 : 900
       )
@@ -310,27 +310,41 @@ Format: ## Analisis ## Arsitektur ## Rencana ## Penugasan ## File ## Keamanan ##
       const workers = [
         {
           id: 'coder', name: 'Andi',
-          system: `Kamu Andi, Senior Full-Stack (full power). Repo ${github.repoFullName}.
-Kode SIAP PAKAI. Path: \`\`\`html:index.html / \`\`\`css:styles.css / \`\`\`js:app.js
-Lengkap, validasi, responsif, tanpa secret. Jangan output-coder-*.
-${power ? 'Edge case + UX + komentar arsitektur singkat.' : ''}
-DELETE: path untuk sampah. Bahasa Indonesia singkat.`,
+          system: `Kamu Andi, Senior Full-Stack. Repo ${github.repoFullName}.
+
+MISI: aplikasi SIAP DIBUKA di browser meskipun brief user sangat pendek.
+
+WAJIB output:
+\`\`\`html:index.html
+...halaman lengkap...
+\`\`\`
+\`\`\`css:styles.css
+...styling modern...
+\`\`\`
+\`\`\`js:app.js
+...logika + data contoh...
+\`\`\`
+
+Aturan: bukan kerangka kosong; UI bisa dipakai; data dummy realistis; responsif; tanpa secret; JANGAN output-coder-*.
+${power ? 'Perindah UX dan edge case.' : ''}
+Bahasa Indonesia sangat singkat di luar kode.`,
         },
         {
           id: 'researcher', name: 'Siti',
-          system: `Kamu Siti, Senior Analyst. Output \`\`\`md:docs/analysis.md
-Kebutuhan, data model, flow, risiko${power ? ', metrik sukses, acceptance checklist' : ''}. Bahasa Indonesia.`,
+          system: `Kamu Siti. Brief boleh pendek — lengkapi asumsi sendiri.
+Output: \`\`\`md:docs/analysis.md
+Tujuan, fitur, data model, cara pakai. Bahasa Indonesia.`,
         },
         {
           id: 'writer', name: 'Rina',
-          system: `Kamu Rina, Tech Writer. Output \`\`\`md:README.md
-Deskripsi, cara pakai, struktur, setup${power ? ', troubleshooting, roadmap' : ''}. Bahasa Indonesia.`,
+          system: `Kamu Rina. Output: \`\`\`md:README.md
+Project sudah selesai: apa ini, buka index.html, fitur, struktur file. Bahasa Indonesia.`,
         },
         {
           id: 'security', name: 'Doni',
-          system: `Kamu Doni, Security Analyst. Output \`\`\`md:docs/security-review.md
+          system: `Kamu Doni, Security. Output: \`\`\`md:docs/security-review.md
 # Security Review\n## Temuan\n## Risiko\n## Perbaikan
-XSS, injection, secret, auth, CORS${power ? ', OWASP checklist' : ''}. Bahasa Indonesia.`,
+Bahasa Indonesia.`,
         },
       ]
 
@@ -341,13 +355,13 @@ XSS, injection, secret, auth, CORS${power ? ', OWASP checklist' : ''}. Bahasa In
           addMessage('System', 'Jeda anti rate-limit...')
           await paceBetweenAgents(pace)
         }
-        updateAgent(w.id, { status: 'working', currentTask: power ? 'Full power...' : 'Kerja...' })
+        updateAgent(w.id, { status: 'working', currentTask: 'Kerja...' })
         try {
           const prior = results.length ? `\n\n## Output agent sebelumnya:\n${results.join('\n').slice(-3500)}` : ''
           const result = await callLLM(
             config,
             w.system,
-            `Tugas:\n${userTask.slice(0, 2500)}\n\nRencana Manager:\n${plan.slice(0, 3000)}${richContext}${prior}`,
+            `Tugas user (bisa singkat — lengkapi sendiri):\n${userTask.slice(0, 2500)}\n\nRencana Manager:\n${plan.slice(0, 3000)}${richContext}${prior}`,
             tok
           )
           results.push(`### ${w.name}\n${result}`)
@@ -363,10 +377,9 @@ XSS, injection, secret, auth, CORS${power ? ', OWASP checklist' : ''}. Bahasa In
 
       addMessage('System', 'Laporan akhir...')
       await paceBetweenAgents(Math.max(8000, pace - 2000))
-      updateAgent('manager', { status: 'thinking', currentTask: 'Laporan...' })
       const summary = await callLLM(
         config,
-        'Kamu Budi. Laporan eksekutif: hasil, file, keamanan, konektor (Bahasa Indonesia).',
+        'Kamu Budi. Laporan singkat: file yang dibuat dan cara pakai (Bahasa Indonesia).',
         `Tugas: ${userTask.slice(0, 800)}\n\n${results.join('\n').slice(0, 5000)}`,
         power ? 1000 : 800
       )
