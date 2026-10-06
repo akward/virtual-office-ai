@@ -154,7 +154,6 @@ export async function putFile(
 ): Promise<{ html_url?: string }> {
   const cleanPath = path.replace(/^\/+/, '').trim()
   if (!cleanPath) throw new Error('Path kosong')
-
   let sha: string | undefined
   try {
     const existing = await getFile(config, cleanPath)
@@ -162,14 +161,12 @@ export async function putFile(
   } catch {
     /* new */
   }
-
   const body: Record<string, string> = {
     message: message.slice(0, 200),
     content: toBase64(content),
     branch: config.branch || 'main',
   }
   if (sha) body.sha = sha
-
   const encoded = cleanPath.split('/').map(encodeURIComponent).join('/')
   const data = await ghJson<{ content?: { html_url?: string }; commit?: { html_url?: string } }>(
     config.token,
@@ -216,6 +213,42 @@ export async function deleteFile(config: GitHubConfig, path: string, message: st
   })
 }
 
+/** Hapus banyak file satu per satu (andal untuk bulk delete di browser) */
+export async function deleteManyFiles(
+  config: GitHubConfig,
+  paths: string[],
+  messagePrefix = 'Virtual Office AI: hapus'
+): Promise<{ deleted: string[]; errors: string[] }> {
+  const deleted: string[] = []
+  const errors: string[] = []
+  const unique = [...new Set(paths.map((p) => p.replace(/^\/+/, '').trim()).filter(Boolean))]
+
+  for (const path of unique) {
+    let ok = false
+    let lastErr = ''
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt > 0) await sleep(600 * attempt)
+        await deleteFile(config, path, `${messagePrefix} ${path}`)
+        deleted.push(path)
+        ok = true
+        break
+      } catch (e: unknown) {
+        lastErr = e instanceof Error ? e.message : String(e)
+        if (/404|tidak ada|Not Found/i.test(lastErr)) {
+          deleted.push(path)
+          ok = true
+          break
+        }
+        await sleep(400)
+      }
+    }
+    if (!ok) errors.push(`${path}: ${lastErr}`)
+    await sleep(250)
+  }
+  return { deleted, errors }
+}
+
 export async function pushMany(
   config: GitHubConfig,
   files: { path: string; content: string; action?: 'upsert' | 'delete' }[],
@@ -240,6 +273,12 @@ export async function pushMany(
     return { ok: [], errors: ['Tidak ada perubahan'], deleted: [] }
   }
 
+  // Pure deletes → sequential API (paling andal)
+  if (upserts.size === 0 && deletes.size > 0) {
+    const result = await deleteManyFiles(config, [...deletes], messagePrefix + ': hapus')
+    return { ok: [], errors: result.errors, deleted: result.deleted }
+  }
+
   const base = `/repos/${config.owner}/${config.repo}`
   const branch = config.branch || 'main'
   const ok: string[] = []
@@ -251,7 +290,6 @@ export async function pushMany(
     const latestCommitSha = ref.object.sha
     const commit = await ghJson<{ tree: { sha: string } }>(config.token, `${base}/git/commits/${latestCommitSha}`)
     const baseTreeSha = commit.tree.sha
-
     const treeItems: { path: string; mode: string; type: string; sha: string | null }[] = []
 
     for (const [path, content] of upserts) {
@@ -301,21 +339,6 @@ export async function pushMany(
       body: JSON.stringify({ sha: newCommit.sha }),
     })
 
-    for (const err of [...errors]) {
-      const path = err.split(':')[0]
-      const content = upserts.get(path)
-      if (!content) continue
-      try {
-        await sleep(400)
-        await putFile(config, path, content, `${messagePrefix}: ${path}`)
-        ok.push(path)
-        const idx = errors.indexOf(err)
-        if (idx >= 0) errors.splice(idx, 1)
-      } catch {
-        /* keep */
-      }
-    }
-
     return { ok, errors, deleted }
   } catch (e: unknown) {
     for (const [path, content] of upserts) {
@@ -327,14 +350,10 @@ export async function pushMany(
       }
       await sleep(350)
     }
-    for (const path of deletes) {
-      try {
-        await deleteFile(config, path, `${messagePrefix}: hapus ${path}`)
-        deleted.push(path)
-      } catch (err: unknown) {
-        errors.push(`hapus ${path}: ${err instanceof Error ? err.message : String(err)}`)
-      }
-      await sleep(350)
+    if (deletes.size) {
+      const r = await deleteManyFiles(config, [...deletes], messagePrefix + ': hapus')
+      deleted.push(...r.deleted)
+      errors.push(...r.errors)
     }
     if (ok.length === 0 && deleted.length === 0 && errors.length === 0) {
       errors.push(e instanceof Error ? e.message : String(e))
@@ -353,17 +372,7 @@ export async function loadProjectContext(config: GitHubConfig, maxFiles = 8): Pr
   } catch {
     /* ignore */
   }
-
-  const candidates = [
-    'README.md',
-    'readme.md',
-    'package.json',
-    'index.html',
-    'styles.css',
-    'app.js',
-    'src/App.tsx',
-    'src/main.tsx',
-  ]
+  const candidates = ['README.md', 'readme.md', 'package.json', 'index.html', 'styles.css', 'app.js', 'src/App.tsx', 'src/main.tsx']
   let count = 0
   for (const path of candidates) {
     if (count >= maxFiles) break
