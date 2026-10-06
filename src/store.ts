@@ -179,14 +179,29 @@ export const useStore = create<Store>((set, get) => ({
     addMessage('Kamu', userTask)
     const collectFrom = (agentId: string, text: string) => {
       const { artifacts } = extractArtifacts(text, agentId)
-      if (artifacts.length) addArtifacts(artifacts.map((a) => ({ filename: a.filename, language: a.language, content: a.content, agentId })))
+      if (artifacts.length) {
+        addArtifacts(
+          artifacts.map((a) => ({
+            filename: a.filename,
+            language: a.language,
+            content: a.content,
+            agentId,
+            action: a.action,
+          }))
+        )
+      }
     }
     const contextBlock = projectContext
       ? `\n\n## REPO: ${github.repoFullName} (${github.branch})\n${projectContext.slice(0, 3500)}`
       : `\n\n## REPO: ${github.repoFullName}`
     try {
       updateAgent('manager', { status: 'thinking', currentTask: 'Merencanakan...' })
-      const plan = await callLLM(config, `Kamu Budi, PM. Bahasa Indonesia. Target: ${github.repoFullName}. Format: ## Analisis ## Rencana ## Penugasan ## File (wajib: index.html, styles.css, app.js, README.md)`, userTask + contextBlock, 900)
+      const plan = await callLLM(
+        config,
+        `Kamu Budi, PM. Bahasa Indonesia. Target: ${github.repoFullName}. Format: ## Analisis ## Rencana ## Penugasan ## File ## Hapus. Boleh update & HAPUS file repo. Hapus: tulis DELETE: path/file`,
+        userTask + contextBlock,
+        900
+      )
       updateAgent('manager', { status: 'talking', lastMessage: plan.slice(0, 100) + '...', currentTask: 'Instruksi' })
       addMessage('Budi (Manager)', plan)
       addMessage('System', 'Jeda anti rate-limit (14 dtk)...')
@@ -196,36 +211,22 @@ export const useStore = create<Store>((set, get) => ({
         {
           id: 'coder',
           name: 'Andi',
-          system: `Kamu Andi, Software Engineer untuk repo ${github.repoFullName}.
-WAJIB format SETIAP file dengan path di header fence, contoh:
-\`\`\`html:index.html
-<!DOCTYPE html>...
-\`\`\`
-\`\`\`css:styles.css
-body{}.
-\`\`\`
-\`\`\`js:app.js
-// logic...
-\`\`\`
-JANGAN pakai nama output-coder-*. JANGAN hanya tulis Path di komentar. Bahasa Indonesia singkat.`,
+          system: `Kamu Andi, Software Engineer. Repo ${github.repoFullName}.
+Kamu BISA menambah, mengubah, dan MENGHAPUS file di repo.
+Format tulis file:\n\`\`\`html:index.html\n...isi...\n\`\`\`
+Format HAPUS file:\n\`\`\`delete:output-coder-1.html\n\`\`\`
+atau baris: DELETE: nama-file.ext
+JANGAN pakai output-coder-* untuk file baru. Bahasa Indonesia singkat.`,
         },
         {
           id: 'researcher',
           name: 'Siti',
-          system: `Kamu Siti, Researcher. Output SATU file:
-\`\`\`md:docs/analysis.md
-# Analisis
-...
-\`\`\``,
+          system: `Kamu Siti. Analisis repo. Output:\n\`\`\`md:docs/analysis.md\n...\n\`\`\`\nJika file sampah: DELETE: path/file`,
         },
         {
           id: 'writer',
           name: 'Rina',
-          system: `Kamu Rina, Writer. Output SATU file:
-\`\`\`md:README.md
-# Judul
-...
-\`\`\``,
+          system: `Kamu Rina. Output:\n\`\`\`md:README.md\n...\n\`\`\`\nBoleh usulkan DELETE: file-lama.ext`,
         },
       ]
       const results: string[] = []
@@ -237,7 +238,12 @@ JANGAN pakai nama output-coder-*. JANGAN hanya tulis Path di komentar. Bahasa In
         }
         updateAgent(w.id, { status: 'working', currentTask: 'Kerja...' })
         try {
-          const result = await callLLM(config, w.system, `Tugas:\n${userTask.slice(0, 1500)}\n\nRencana:\n${plan.slice(0, 2000)}${contextBlock}`, 1200)
+          const result = await callLLM(
+            config,
+            w.system,
+            `Tugas:\n${userTask.slice(0, 1500)}\n\nRencana:\n${plan.slice(0, 2000)}${contextBlock}`,
+            1200
+          )
           results.push(`### ${w.name}\n${result}`)
           collectFrom(w.id, result)
           updateAgent(w.id, { status: 'done', lastMessage: result.slice(0, 80) + '...', currentTask: 'Selesai' })
@@ -252,13 +258,20 @@ JANGAN pakai nama output-coder-*. JANGAN hanya tulis Path di komentar. Bahasa In
       addMessage('System', 'Jeda sebelum laporan akhir...')
       await paceBetweenAgents(12000)
       updateAgent('manager', { status: 'thinking', currentTask: 'Laporan...' })
-      const summary = await callLLM(config, 'Kamu Budi. Laporan singkat + daftar file (Bahasa Indonesia).', `Tugas: ${userTask.slice(0, 800)}\n\n${results.join('\n').slice(0, 4000)}`, 800)
+      const summary = await callLLM(
+        config,
+        'Kamu Budi. Laporan singkat + daftar file yang diubah/dihapus (Bahasa Indonesia).',
+        `Tugas: ${userTask.slice(0, 800)}\n\n${results.join('\n').slice(0, 4000)}`,
+        800
+      )
       collectFrom('manager', summary)
       updateAgent('manager', { status: 'done', lastMessage: summary.slice(0, 80) + '...', currentTask: 'Selesai' })
       addMessage('Budi (Manager)', summary)
       if (github.autoPush && get().artifacts.length > 0) {
         addMessage('System', 'Auto-push aktif — commit ke GitHub...')
-        try { await get().pushArtifactsToGithub() } catch (e: unknown) {
+        try {
+          await get().pushArtifactsToGithub()
+        } catch (e: unknown) {
           addMessage('System', 'Auto-push gagal: ' + (e instanceof Error ? e.message : String(e)))
         }
       } else if (get().artifacts.length > 0) {
@@ -279,8 +292,24 @@ JANGAN pakai nama output-coder-*. JANGAN hanya tulis Path di komentar. Bahasa In
     set({ isPushing: true })
     try {
       const cfg: GitHubConfig = { token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' }
-      const { ok, errors } = await pushMany(cfg, artifacts.map((a) => ({ path: a.filename.replace(/^\/+/, ''), content: a.content })), 'Virtual Office AI')
-      if (ok.length) addMessage('System', `Push ke ${github.repoFullName}: ${ok.join(', ')}\nhttps://github.com/${github.owner}/${github.repo}`)
+      const { ok, errors, deleted } = await pushMany(
+        cfg,
+        artifacts.map((a) => ({
+          path: a.filename.replace(/^\/+/, ''),
+          content: a.content,
+          action: a.action || 'upsert',
+        })),
+        'Virtual Office AI'
+      )
+      const parts: string[] = []
+      if (ok.length) parts.push('Update/tambah: ' + ok.join(', '))
+      if (deleted?.length) parts.push('Hapus: ' + deleted.join(', '))
+      if (parts.length) {
+        addMessage(
+          'System',
+          `Push ke ${github.repoFullName}\n${parts.join('\n')}\nhttps://github.com/${github.owner}/${github.repo}`
+        )
+      }
       if (errors.length) addMessage('System', 'Gagal: ' + errors.join('; '))
     } finally {
       set({ isPushing: false })
