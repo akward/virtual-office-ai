@@ -1,16 +1,13 @@
 import { create } from 'zustand'
 import type { Agent, AppConfig, Artifact, GitHubSettings, Message, RepoInfo } from './types'
-import { callLLM, extractArtifacts, paceBetweenAgents } from './llm'
+import { callLLM, callLLMMulti, callLLMEnsemble, extractArtifacts, paceBetweenAgents } from './llm'
 import { getAuthenticatedUser, listAllRepos, loadProjectContext, pushMany, createRepo, listRepoFiles, deleteManyFiles, emptyRepoBranch, type GitHubConfig } from './github'
 import {
-  type ConnectorConfig,
-  defaultConnectors,
-  saveConnectors,
-  connectorsStatus,
-  executeConnectorActions,
-  handleGmailOAuthCallback,
-  startGmailOAuth,
+  type ConnectorConfig, defaultConnectors, saveConnectors, connectorsStatus,
+  executeConnectorActions, handleGmailOAuthCallback, startGmailOAuth,
 } from './connectors'
+import { searchOnline, needsOnlineResearch, buildResearchQueries } from './websearch'
+import { deployToVercel } from './vercel'
 
 const defaultAgents: Agent[] = [
   { id: 'manager', name: 'Budi', role: 'Project Manager', color: '#3b82f6', emoji: '👔', status: 'idle', currentTask: '', lastMessage: 'Siap!', x: 18, y: 42 },
@@ -38,70 +35,42 @@ function loadGH(): GitHubSettings {
 
 function detectBulkDeleteAll(task: string): boolean {
   const t = task.toLowerCase().replace(/\s+/g, ' ')
-  return [
-    /hapus\s+semua\s+file/, /hapus\s+seluruh\s+file/, /hapus\s+semua\s+isi/, /hapus\s+semua/,
-    /delete\s+all\s+files?/, /remove\s+all\s+files?/, /kosongkan\s+(repo|repository)/,
-    /bersihkan\s+(semua\s+)?(isi\s+)?repo/, /bersihkan\s+repo/, /wipe\s+(the\s+)?repo/,
-    /clear\s+(the\s+)?repo/, /hapus\s+semua\s+output/, /hapus\s+file\s+output/,
-  ].some((p) => p.test(t))
+  return [/hapus\s+semua/, /delete\s+all/, /kosongkan\s+repo/, /bersihkan\s+repo/, /wipe\s+repo/, /clear\s+repo/].some((p) => p.test(t))
 }
 
 function detectRepoNameInTask(task: string): string | null {
-  const m =
-    task.match(/repo(?:sitory)?\s+([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/i) ||
-    task.match(/repo(?:sitory)?\s+([a-zA-Z0-9_.-]+)/i) ||
-    task.match(/di\s+([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/i)
+  const m = task.match(/repo(?:sitory)?\s+([a-zA-Z0-9_.\/-]+)/i)
   return m ? m[1].trim() : null
 }
 
 interface Store {
-  agents: Agent[]
-  messages: Message[]
-  artifacts: Artifact[]
-  config: AppConfig
-  github: GitHubSettings
-  repos: RepoInfo[]
-  projectContext: string
-  isRunning: boolean
-  isPushing: boolean
-  isLoadingRepos: boolean
-  isCreatingRepo: boolean
-  connectors: ConnectorConfig
-  powerMode: boolean
-  setConnectors: (c: Partial<ConnectorConfig>) => void
-  setPowerMode: (v: boolean) => void
-  initOAuthCallback: () => Promise<void>
-  connectGmail: () => Promise<void>
-  setConfig: (c: Partial<AppConfig>) => void
-  setGithub: (g: Partial<GitHubSettings>) => void
-  connectWithToken: () => Promise<void>
-  selectRepo: (fullName: string) => Promise<void>
+  agents: Agent[]; messages: Message[]; artifacts: Artifact[]; config: AppConfig; github: GitHubSettings
+  repos: RepoInfo[]; projectContext: string; isRunning: boolean; isPushing: boolean; isLoadingRepos: boolean
+  isCreatingRepo: boolean; connectors: ConnectorConfig; powerMode: boolean
+  setConnectors: (c: Partial<ConnectorConfig>) => void; setPowerMode: (v: boolean) => void
+  initOAuthCallback: () => Promise<void>; connectGmail: () => Promise<void>
+  setConfig: (c: Partial<AppConfig>) => void; setGithub: (g: Partial<GitHubSettings>) => void
+  connectWithToken: () => Promise<void>; selectRepo: (fullName: string) => Promise<void>
   createNewRepo: (name: string, opts?: { description?: string; private?: boolean }) => Promise<void>
-  loadContext: () => Promise<void>
-  updateAgent: (id: string, patch: Partial<Agent>) => void
+  loadContext: () => Promise<void>; updateAgent: (id: string, patch: Partial<Agent>) => void
   addMessage: (from: string, text: string) => void
-  addArtifacts: (list: Omit<Artifact, 'id' | 'createdAt'>[]) => void
-  clearArtifacts: () => void
-  runTask: (userTask: string) => Promise<void>
-  pushArtifactsToGithub: () => Promise<void>
+  addArtifacts: (list: Omit<Artifact, 'id' | 'createdAt'>[]) => void; clearArtifacts: () => void
+  runTask: (userTask: string) => Promise<void>; pushArtifactsToGithub: () => Promise<void>
 }
 
 export const useStore = create<Store>((set, get) => ({
-  agents: defaultAgents,
-  messages: [],
-  artifacts: [],
-  repos: [],
-  projectContext: '',
-  isRunning: false,
-  isPushing: false,
-  isLoadingRepos: false,
-  isCreatingRepo: false,
+  agents: defaultAgents, messages: [], artifacts: [], repos: [], projectContext: '',
+  isRunning: false, isPushing: false, isLoadingRepos: false, isCreatingRepo: false,
   connectors: defaultConnectors(),
   powerMode: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_power') !== '0' : true,
   config: {
     apiKey: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_api_key') || '' : '',
     baseUrl: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_base_url') || 'https://api.groq.com/openai/v1' : 'https://api.groq.com/openai/v1',
     model: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_model') || 'openai/gpt-oss-20b' : 'openai/gpt-oss-20b',
+    apiKey2: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_api_key2') || '' : '',
+    baseUrl2: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_base_url2') || 'https://openrouter.ai/api/v1' : 'https://openrouter.ai/api/v1',
+    model2: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_model2') || 'google/gemini-2.0-flash-exp:free' : 'google/gemini-2.0-flash-exp:free',
+    vercelToken: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_vercel_token') || '' : '',
   },
   github: loadGH(),
 
@@ -111,6 +80,10 @@ export const useStore = create<Store>((set, get) => ({
       if (c.apiKey !== undefined) localStorage.setItem('vo_api_key', c.apiKey)
       if (c.baseUrl !== undefined) localStorage.setItem('vo_base_url', c.baseUrl)
       if (c.model !== undefined) localStorage.setItem('vo_model', c.model)
+      if (c.apiKey2 !== undefined) localStorage.setItem('vo_api_key2', c.apiKey2)
+      if (c.baseUrl2 !== undefined) localStorage.setItem('vo_base_url2', c.baseUrl2)
+      if (c.model2 !== undefined) localStorage.setItem('vo_model2', c.model2)
+      if (c.vercelToken !== undefined) localStorage.setItem('vo_vercel_token', c.vercelToken)
     }
     return { config: next }
   }),
@@ -130,26 +103,14 @@ export const useStore = create<Store>((set, get) => ({
     return { github: next }
   }),
 
-  setConnectors: (c) => set((s) => {
-    saveConnectors(c)
-    return { connectors: { ...s.connectors, ...c } }
-  }),
-
-  setPowerMode: (v) => {
-    if (typeof localStorage !== 'undefined') localStorage.setItem('vo_power', v ? '1' : '0')
-    set({ powerMode: v })
-  },
+  setConnectors: (c) => set((s) => { saveConnectors(c); return { connectors: { ...s.connectors, ...c } } }),
+  setPowerMode: (v) => { if (typeof localStorage !== 'undefined') localStorage.setItem('vo_power', v ? '1' : '0'); set({ powerMode: v }) },
 
   initOAuthCallback: async () => {
     try {
       const result = await handleGmailOAuthCallback()
-      if (result) {
-        get().setConnectors(result)
-        get().addMessage('System', `Gmail terhubung${result.gmailEmail ? ': ' + result.gmailEmail : ''}`)
-      }
-    } catch (e: unknown) {
-      get().addMessage('System', 'OAuth Gmail gagal: ' + (e instanceof Error ? e.message : String(e)))
-    }
+      if (result) { get().setConnectors(result); get().addMessage('System', `Gmail terhubung${result.gmailEmail ? ': ' + result.gmailEmail : ''}`) }
+    } catch (e: unknown) { get().addMessage('System', 'OAuth Gmail gagal: ' + (e instanceof Error ? e.message : String(e))) }
   },
 
   connectGmail: async () => {
@@ -165,14 +126,11 @@ export const useStore = create<Store>((set, get) => ({
     try {
       const username = await getAuthenticatedUser(github.token)
       const repos = await listAllRepos(github.token)
-      set({ repos })
-      setGithub({ connected: true, username })
+      set({ repos }); setGithub({ connected: true, username })
       addMessage('System', `Login @${username}. ${repos.length} repository.`)
       const match = repos.find((r) => r.full_name === github.repoFullName) || repos[0]
       if (match) await get().selectRepo(match.full_name)
-    } finally {
-      set({ isLoadingRepos: false })
-    }
+    } finally { set({ isLoadingRepos: false }) }
   },
 
   selectRepo: async (fullName: string) => {
@@ -192,11 +150,8 @@ export const useStore = create<Store>((set, get) => ({
       const repo = await createRepo(github.token, name.trim(), { description: opts?.description, private: opts?.private ?? false, auto_init: true })
       set((s) => ({ repos: [repo, ...s.repos.filter((r) => r.full_name !== repo.full_name)] }))
       setGithub({ connected: true, username: github.username || repo.owner, owner: repo.owner, repo: repo.name, branch: repo.default_branch || 'main', repoFullName: repo.full_name })
-      addMessage('System', `Repo baru: ${repo.full_name}`)
-      set({ projectContext: '' })
-    } finally {
-      set({ isCreatingRepo: false })
-    }
+      addMessage('System', `Repo baru: ${repo.full_name}`); set({ projectContext: '' })
+    } finally { set({ isCreatingRepo: false }) }
   },
 
   loadContext: async () => {
@@ -207,9 +162,7 @@ export const useStore = create<Store>((set, get) => ({
       const ctx = await loadProjectContext(cfg)
       set({ projectContext: ctx })
       addMessage('System', ctx ? `Konteks dimuat (${Math.round(ctx.length / 100) / 10}k).` : 'Repo kosong.')
-    } catch (e: unknown) {
-      addMessage('System', `Gagal konteks: ${e instanceof Error ? e.message : String(e)}`)
-    }
+    } catch (e: unknown) { addMessage('System', `Gagal konteks: ${e instanceof Error ? e.message : String(e)}`) }
   },
 
   updateAgent: (id, patch) => set((s) => ({ agents: s.agents.map((a) => (a.id === id ? { ...a, ...patch } : a)) })),
@@ -220,21 +173,14 @@ export const useStore = create<Store>((set, get) => ({
   runTask: async (userTask: string) => {
     const { config, updateAgent, addMessage, addArtifacts, clearArtifacts, github, repos } = get()
     if (get().isRunning) return
-    if (!github.connected || !github.repo) {
-      addMessage('System', 'Pilih repository GitHub dulu.')
-      return
-    }
-    set({ isRunning: true })
-    clearArtifacts()
-    addMessage('Kamu', userTask)
+    if (!github.connected || !github.repo) { addMessage('System', 'Pilih repository GitHub dulu.'); return }
+    set({ isRunning: true }); clearArtifacts(); addMessage('Kamu', userTask)
 
     const mentioned = detectRepoNameInTask(userTask)
     if (mentioned) {
       const match = repos.find((r) => r.full_name.toLowerCase() === mentioned.toLowerCase()) || repos.find((r) => r.name.toLowerCase() === mentioned.toLowerCase())
       if (match && match.full_name !== github.repoFullName) {
-        try { await get().selectRepo(match.full_name) } catch (e: unknown) {
-          addMessage('System', 'Gagal pilih repo: ' + (e instanceof Error ? e.message : String(e)))
-        }
+        try { await get().selectRepo(match.full_name) } catch (e: unknown) { addMessage('System', 'Gagal pilih repo: ' + (e instanceof Error ? e.message : String(e))) }
       }
     }
 
@@ -244,33 +190,19 @@ export const useStore = create<Store>((set, get) => ({
     if (detectBulkDeleteAll(userTask)) {
       try {
         const files = await listRepoFiles(cfgNow, 500)
-        if (!files.length) {
-          addMessage('System', 'Repo sudah kosong.')
-          set({ isRunning: false })
-          return
-        }
-        await emptyRepoBranch(cfgNow, `Virtual Office AI: hapus ${files.length} file`)
+        if (!files.length) { addMessage('System', 'Repo sudah kosong.'); set({ isRunning: false }); return }
+        await emptyRepoBranch(cfgNow, `VO AI: hapus ${files.length} file`)
         addMessage('System', `Terhapus ${files.length} file.`)
-      } catch (e: unknown) {
-        addMessage('System', 'Gagal hapus: ' + (e instanceof Error ? e.message : String(e)))
-      } finally {
-        set({ isRunning: false })
-      }
+      } catch (e: unknown) { addMessage('System', 'Gagal hapus: ' + (e instanceof Error ? e.message : String(e))) }
+      finally { set({ isRunning: false }) }
       return
     }
 
-    try {
-      addMessage('System', 'Memuat konteks repo...')
-      await get().loadContext()
-    } catch { /* ignore */ }
+    try { addMessage('System', 'Memuat konteks repo...'); await get().loadContext() } catch { /* */ }
 
     const collectFrom = (agentId: string, text: string) => {
       const { artifacts } = extractArtifacts(text, agentId)
-      if (artifacts.length) {
-        addArtifacts(artifacts.map((a) => ({
-          filename: a.filename, language: a.language, content: a.content, agentId, action: a.action,
-        })))
-      }
+      if (artifacts.length) addArtifacts(artifacts.map((a) => ({ filename: a.filename, language: a.language, content: a.content, agentId, action: a.action })))
     }
 
     try {
@@ -278,92 +210,60 @@ export const useStore = create<Store>((set, get) => ({
       const power = get().powerMode
       const pace = power ? 10000 : 14000
       const tok = power ? 2200 : 1200
-      const ctxLimit = power ? 8000 : 3500
       const ctx = get().projectContext
-      const richContext = ctx
-        ? `\n\n## REPO: ${github.repoFullName} (${github.branch})\n${ctx.slice(0, ctxLimit)}`
-        : `\n\n## REPO: ${github.repoFullName}`
+      const richContext = ctx ? `\n\n## REPO: ${github.repoFullName}\n${ctx.slice(0, power ? 8000 : 3500)}` : `\n\n## REPO: ${github.repoFullName}`
       const connInfo = connectorsStatus(get().connectors)
 
-      const plan = await callLLM(
-        config,
-        `Kamu Budi, PM senior. Bahasa Indonesia. Repo: ${github.repoFullName}.
-Konektor: ${connInfo}.
+      let researchBlock = ''
+      if (needsOnlineResearch(userTask) || /online|hosting|deploy|vercel/i.test(userTask) || power) {
+        addMessage('System', '🔍 Riset online gratis (tanpa API key)...')
+        updateAgent('researcher', { status: 'working', currentTask: 'Riset online...' })
+        const chunks: string[] = []
+        for (const q of buildResearchQueries(userTask)) {
+          try { chunks.push((await searchOnline(q)).text) } catch (se: unknown) { chunks.push('Riset: ' + (se instanceof Error ? se.message : String(se))) }
+        }
+        researchBlock = '\n\n' + chunks.join('\n\n').slice(0, 6000)
+        addMessage('Siti (Research)', researchBlock.slice(0, 1200) + '…')
+        updateAgent('researcher', { status: 'done', lastMessage: 'Riset OK', currentTask: 'Selesai' })
+      }
 
-PENTING — user sering tulis tugas SINGKAT. Kamu wajib mengisi detail sendiri:
-- Anggap user ingin HASIL SIAP PAKAI (buka di browser langsung), bukan kerangka kosong.
-- Default web app: index.html + styles.css + app.js + README.md (kecuali user minta stack lain).
-- Sertakan UI rapi, data contoh, dan alur yang bisa dicoba tanpa setup rumit.
-- Tim: Andi (kode lengkap), Siti (analisis), Rina (README), Doni (security).
-- Jangan minta user menjelaskan ulang; ambil keputusan desain yang masuk akal.
-- Notifikasi hanya jika user meminta.
-Mode ${power ? 'FULL POWER' : 'standar'}.
-Format singkat: ## Analisis ## Rencana ## File wajib ## Penugasan`,
-        userTask + richContext,
-        power ? 1400 : 900
-      )
+      const planSystem = `Kamu Budi, PM otonom. Bahasa Indonesia. Repo: ${github.repoFullName}. Konektor: ${connInfo}.
+OTONOMI: lengkapi brief singkat; pilih stack sendiri; jika perlu online prioritaskan hosting GRATIS (Vercel/Netlify/GitHub Pages); default index.html+styles.css+app.js+README siap deploy.
+Format: ## Analisis ## Keputusan hosting ## Rencana ## File ## Penugasan`
+
+      let plan: string; let planUsed = config.model
+      try {
+        if (config.apiKey2 && power) {
+          addMessage('System', '🧠 Multi-API: dua model berpikir...')
+          const ens = await callLLMEnsemble(config, planSystem, userTask + richContext + researchBlock, 1400)
+          plan = ens.text; planUsed = ens.used
+        } else {
+          const one = await callLLMMulti(config, planSystem, userTask + richContext + researchBlock, power ? 1400 : 900)
+          plan = one.text; planUsed = one.used
+        }
+      } catch { plan = await callLLM(config, planSystem, userTask + richContext + researchBlock, 900) }
+      addMessage('System', `Model rencana: ${planUsed}`)
       updateAgent('manager', { status: 'talking', lastMessage: plan.slice(0, 100) + '...', currentTask: 'Instruksi' })
       addMessage('Budi (Manager)', plan)
-      addMessage('System', `Mode ${power ? 'FULL POWER ⚡' : 'standar'} · jeda ${pace / 1000}s...`)
       await paceBetweenAgents(pace)
 
       const workers = [
-        {
-          id: 'coder', name: 'Andi',
-          system: `Kamu Andi, Senior Full-Stack. Repo ${github.repoFullName}.
-
-MISI: aplikasi SIAP DIBUKA di browser meskipun brief user sangat pendek.
-
-WAJIB output:
-\`\`\`html:index.html
-...halaman lengkap...
-\`\`\`
-\`\`\`css:styles.css
-...styling modern...
-\`\`\`
-\`\`\`js:app.js
-...logika + data contoh...
-\`\`\`
-
-Aturan: bukan kerangka kosong; UI bisa dipakai; data dummy realistis; responsif; tanpa secret; JANGAN output-coder-*.
-${power ? 'Perindah UX dan edge case.' : ''}
-Bahasa Indonesia sangat singkat di luar kode.`,
-        },
-        {
-          id: 'researcher', name: 'Siti',
-          system: `Kamu Siti. Brief boleh pendek — lengkapi asumsi sendiri.
-Output: \`\`\`md:docs/analysis.md
-Tujuan, fitur, data model, cara pakai. Bahasa Indonesia.`,
-        },
-        {
-          id: 'writer', name: 'Rina',
-          system: `Kamu Rina. Output: \`\`\`md:README.md
-Project sudah selesai: apa ini, buka index.html, fitur, struktur file. Bahasa Indonesia.`,
-        },
-        {
-          id: 'security', name: 'Doni',
-          system: `Kamu Doni, Security. Output: \`\`\`md:docs/security-review.md
-# Security Review\n## Temuan\n## Risiko\n## Perbaikan
-Bahasa Indonesia.`,
-        },
+        { id: 'coder', name: 'Andi', system: `Kamu Andi, Full-Stack. Repo ${github.repoFullName}. SIAP PAKAI + siap deploy static.
+WAJIB: \`\`\`html:index.html \`\`\`css:styles.css \`\`\`js:app.js — lengkap, data contoh, tanpa secret, jangan output-coder-*.` },
+        { id: 'researcher', name: 'Siti', system: `Kamu Siti. Output \`\`\`md:docs/analysis.md — fitur, data model, hosting. Bahasa Indonesia.` },
+        { id: 'writer', name: 'Rina', system: `Kamu Rina. Output \`\`\`md:README.md — cara buka lokal + cara online (Vercel).` },
+        { id: 'security', name: 'Doni', system: `Kamu Doni. Output \`\`\`md:docs/security-review.md — temuan & perbaikan.` },
       ]
 
       const results: string[] = []
       for (let wi = 0; wi < workers.length; wi++) {
         const w = workers[wi]
-        if (wi > 0) {
-          addMessage('System', 'Jeda anti rate-limit...')
-          await paceBetweenAgents(pace)
-        }
+        if (wi > 0) { addMessage('System', 'Jeda anti rate-limit...'); await paceBetweenAgents(pace) }
         updateAgent(w.id, { status: 'working', currentTask: 'Kerja...' })
         try {
-          const prior = results.length ? `\n\n## Output agent sebelumnya:\n${results.join('\n').slice(-3500)}` : ''
-          const result = await callLLM(
-            config,
-            w.system,
-            `Tugas user (bisa singkat — lengkapi sendiri):\n${userTask.slice(0, 2500)}\n\nRencana Manager:\n${plan.slice(0, 3000)}${richContext}${prior}`,
-            tok
-          )
+          const prior = results.length ? `\n\n## Sebelumnya:\n${results.join('\n').slice(-3500)}` : ''
+          const out = await callLLMMulti(config, w.system, `Tugas:\n${userTask.slice(0, 2500)}\n\nRencana:\n${plan.slice(0, 3000)}${richContext}${researchBlock.slice(0, 2000)}${prior}`, tok)
+          const result = out.text
           results.push(`### ${w.name}\n${result}`)
           collectFrom(w.id, result)
           updateAgent(w.id, { status: 'done', lastMessage: result.slice(0, 80) + '...', currentTask: 'Selesai' })
@@ -375,30 +275,29 @@ Bahasa Indonesia.`,
         }
       }
 
-      addMessage('System', 'Laporan akhir...')
       await paceBetweenAgents(Math.max(8000, pace - 2000))
-      const summary = await callLLM(
-        config,
-        'Kamu Budi. Laporan singkat: file yang dibuat dan cara pakai (Bahasa Indonesia).',
-        `Tugas: ${userTask.slice(0, 800)}\n\n${results.join('\n').slice(0, 5000)}`,
-        power ? 1000 : 800
-      )
-      collectFrom('manager', summary)
-      updateAgent('manager', { status: 'done', lastMessage: summary.slice(0, 80) + '...', currentTask: 'Selesai' })
-      addMessage('Budi (Manager)', summary)
+      const summary = await callLLMMulti(config, 'Kamu Budi. Laporan: file + cara pakai online (Bahasa Indonesia).', `Tugas: ${userTask.slice(0, 800)}\n${results.join('\n').slice(0, 5000)}`, 900)
+      collectFrom('manager', summary.text)
+      updateAgent('manager', { status: 'done', lastMessage: summary.text.slice(0, 80) + '...', currentTask: 'Selesai' })
+      addMessage('Budi (Manager)', summary.text)
 
       try {
-        const connLogs = await executeConnectorActions(get().connectors, results.join('\n') + '\n' + summary)
+        const connLogs = await executeConnectorActions(get().connectors, results.join('\n') + '\n' + summary.text)
         for (const line of connLogs) addMessage('System', '🔌 ' + line)
-      } catch (ce: unknown) {
-        addMessage('System', 'Konektor: ' + (ce instanceof Error ? ce.message : String(ce)))
-      }
+      } catch (ce: unknown) { addMessage('System', 'Konektor: ' + (ce instanceof Error ? ce.message : String(ce))) }
 
       if (github.autoPush && get().artifacts.length > 0) {
         addMessage('System', 'Auto-push...')
-        try { await get().pushArtifactsToGithub() } catch (e: unknown) {
-          addMessage('System', 'Push gagal: ' + (e instanceof Error ? e.message : String(e)))
-        }
+        try { await get().pushArtifactsToGithub() } catch (e: unknown) { addMessage('System', 'Push gagal: ' + (e instanceof Error ? e.message : String(e))) }
+      }
+
+      const arts = get().artifacts.filter((a) => a.action !== 'delete')
+      if (config.vercelToken && arts.some((a) => /\.html$/i.test(a.filename))) {
+        addMessage('System', '🚀 Deploy Vercel (gratis)...')
+        try {
+          const dep = await deployToVercel({ token: config.vercelToken, name: github.repo || 'vo-app', files: arts.map((a) => ({ path: a.filename, content: a.content })) })
+          addMessage('System', `Online: ${dep.url}`)
+        } catch (ve: unknown) { addMessage('System', 'Vercel: ' + (ve instanceof Error ? ve.message : String(ve))) }
       }
     } catch (e: unknown) {
       addMessage('System', 'Error: ' + (e instanceof Error ? e.message : String(e)))
@@ -415,18 +314,12 @@ Bahasa Indonesia.`,
     set({ isPushing: true })
     try {
       const cfg: GitHubConfig = { token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' }
-      const { ok, errors, deleted } = await pushMany(
-        cfg,
-        artifacts.map((a) => ({ path: a.filename.replace(/^\/+/, ''), content: a.content, action: a.action || 'upsert' })),
-        'Virtual Office AI'
-      )
+      const { ok, errors, deleted } = await pushMany(cfg, artifacts.map((a) => ({ path: a.filename.replace(/^\/+/, ''), content: a.content, action: a.action || 'upsert' })), 'Virtual Office AI')
       const parts: string[] = []
       if (ok.length) parts.push('Update: ' + ok.join(', '))
       if (deleted?.length) parts.push('Hapus: ' + deleted.join(', '))
       if (parts.length) addMessage('System', parts.join('\n'))
       if (errors.length) addMessage('System', 'Gagal: ' + errors.join('; '))
-    } finally {
-      set({ isPushing: false })
-    }
+    } finally { set({ isPushing: false }) }
   },
 }))
