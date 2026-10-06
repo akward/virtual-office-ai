@@ -126,31 +126,82 @@ function inferFilename(lang: string, content: string, agentId: string, i: number
   return `output-${agentId}-${i}.${langToExt(lang)}`
 }
 
+export type ExtractedArtifact = {
+  filename: string
+  language: string
+  content: string
+  action: 'upsert' | 'delete'
+}
+
 export function extractArtifacts(
   text: string,
   agentId: string
-): { cleanText: string; artifacts: { filename: string; language: string; content: string }[] } {
-  const artifacts: { filename: string; language: string; content: string }[] = []
+): { cleanText: string; artifacts: ExtractedArtifact[] } {
+  const artifacts: ExtractedArtifact[] = []
+  const used = new Set<string>()
+  let i = 0
+
+  const pushArt = (filename: string, language: string, content: string, action: 'upsert' | 'delete') => {
+    let finalName = filename.replace(/^\/+/, '').trim()
+    if (!finalName) return
+    if (action === 'upsert') {
+      let n = 2
+      let candidate = finalName
+      while (used.has(candidate + '::upsert')) {
+        const parts = finalName.split('.')
+        if (parts.length > 1) {
+          const ext = parts.pop()
+          candidate = `${parts.join('.')}-${n}.${ext}`
+        } else {
+          candidate = `${finalName}-${n}`
+        }
+        n++
+      }
+      finalName = candidate
+      used.add(finalName + '::upsert')
+    } else {
+      if (used.has(finalName + '::delete')) return
+      used.add(finalName + '::delete')
+    }
+    artifacts.push({ filename: finalName, language, content, action })
+  }
+
   const re = /```([a-zA-Z0-9_+.-]*)(?::([^\n]+))?\n([\s\S]*?)```/g
   let match
-  let i = 0
-  const used = new Set<string>()
-
   while ((match = re.exec(text)) !== null) {
     let lang = (match[1] || '').toLowerCase()
     let filename = (match[2] || '').trim().replace(/^["']|["']$/g, '').replace(/^\.\//, '')
-    const content = match[3].trim()
-    if (!content) continue
+    let content = match[3].trim()
+
+    if (lang === 'delete' || lang === 'hapus' || lang === 'rm') {
+      const path = filename || content.split('\n')[0].trim().replace(/^["']|["']$/g, '')
+      if (path) pushArt(path, 'delete', '', 'delete')
+      continue
+    }
+
+    if (!content && !filename) continue
 
     if (
       lang &&
       !filename &&
       /\.[a-z0-9]+$/i.test(lang) &&
-      !['html', 'css', 'js', 'ts', 'tsx', 'py', 'md', 'json', 'yml', 'yaml', 'sh', 'bash', 'sql', 'xml', 'txt'].includes(lang)
+      !['html', 'css', 'js', 'ts', 'tsx', 'py', 'md', 'json', 'yml', 'yaml', 'sh', 'bash', 'sql', 'xml', 'txt', 'delete', 'hapus'].includes(lang)
     ) {
       filename = lang
       const ext = filename.split('.').pop() || 'txt'
       lang = ext
+    }
+
+    if (filename && !content) {
+      pushArt(filename, 'delete', '', 'delete')
+      continue
+    }
+
+    if (!content) continue
+
+    if (/^\s*(DELETE|HAPUS)\s+(THIS\s+FILE|FILE)?\s*$/i.test(content) && filename) {
+      pushArt(filename, 'delete', '', 'delete')
+      continue
     }
 
     if (!filename) {
@@ -163,21 +214,13 @@ export function extractArtifacts(
       i++
     }
 
-    let finalName = filename
-    let n = 2
-    while (used.has(finalName)) {
-      const parts = filename.split('.')
-      if (parts.length > 1) {
-        const ext = parts.pop()
-        finalName = `${parts.join('.')}-${n}.${ext}`
-      } else {
-        finalName = `${filename}-${n}`
-      }
-      n++
-    }
-    used.add(finalName)
+    pushArt(filename, lang || 'text', content, 'upsert')
+  }
 
-    artifacts.push({ filename: finalName, language: lang || 'text', content })
+  const lineRe = /^\s*(?:DELETE|HAPUS|REMOVE|RM)\s*[:\-]\s*[`'\"]?([^\s`'\"]+)[`'\"]?\s*$/gim
+  let lm
+  while ((lm = lineRe.exec(text)) !== null) {
+    pushArt(lm[1], 'delete', '', 'delete')
   }
 
   return { cleanText: text, artifacts }
