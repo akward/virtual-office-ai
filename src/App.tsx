@@ -43,9 +43,7 @@ function OfficeFloor() {
       <div className="floor-grid" />
       {agents.map((a) => (
         <div key={a.id} className={`agent-sprite ${a.status}`} style={{ left: `${a.x}%`, top: `${a.y}%` }} title={`${a.name} — ${a.role}`}>
-          <div className="agent-body" style={{ background: a.color }}>
-            {a.emoji}<span className={`status-dot ${a.status}`} />
-          </div>
+          <div className="agent-body" style={{ background: a.color }}>{a.emoji}<span className={`status-dot ${a.status}`} /></div>
           <div className="agent-label">{a.name}</div>
           {a.currentTask && <div className="speech">{a.currentTask}</div>}
         </div>
@@ -56,7 +54,7 @@ function OfficeFloor() {
 
 function SidePanel() {
   const {
-    agents, messages, artifacts, config, github, repos,
+    messages, artifacts, config, github, repos,
     isRunning, isPushing, isLoadingRepos, isCreatingRepo,
     setConfig, setGithub, connectWithToken, selectRepo, createNewRepo,
     runTask, clearArtifacts, pushArtifactsToGithub, addMessage,
@@ -96,9 +94,17 @@ function SidePanel() {
           }}>
             {Object.entries(PROVIDERS).map(([k, v]) => <option key={k} value={k}>{v.name}</option>)}
           </select>
-          <input type="password" value={config.apiKey} onChange={(e) => setConfig({ apiKey: e.target.value })} placeholder="API key..." />
-          <input value={config.model} onChange={(e) => setConfig({ model: e.target.value })} />
+          <input type="password" value={config.apiKey} onChange={(e) => setConfig({ apiKey: e.target.value })} placeholder="API Key #1 (utama)" />
+          <input value={config.model} onChange={(e) => setConfig({ model: e.target.value })} placeholder="Model #1" />
           <p className="help-text">{PROVIDERS[provider]?.help}</p>
+          <label className="field-label">API Key #2 (multi-model / fallback)</label>
+          <input type="password" value={config.apiKey2 || ''} onChange={(e) => setConfig({ apiKey2: e.target.value })} placeholder="OpenRouter / Gemini key" />
+          <input value={config.baseUrl2 || ''} onChange={(e) => setConfig({ baseUrl2: e.target.value })} placeholder="https://openrouter.ai/api/v1" />
+          <input value={config.model2 || ''} onChange={(e) => setConfig({ model2: e.target.value })} placeholder="google/gemini-2.0-flash-exp:free" />
+          <p className="help-text">Dua model berpikir bersama (Full Power). Fallback jika #1 rate-limit.</p>
+          <label className="field-label">Vercel Token (deploy gratis otomatis)</label>
+          <input type="password" value={config.vercelToken || ''} onChange={(e) => setConfig({ vercelToken: e.target.value })} placeholder="vercel_..." />
+          <p className="help-text">vercel.com → Settings → Tokens. Setelah agent selesai, app bisa online otomatis.</p>
         </>)}
       </div>
 
@@ -129,8 +135,7 @@ function SidePanel() {
               }}>{isCreatingRepo ? '...' : 'Buat repo'}</button>
             </div>
             <label className="row-actions">
-              <input type="checkbox" checked={github.autoPush} onChange={(e) => setGithub({ autoPush: e.target.checked })} />
-              Auto-push GitHub
+              <input type="checkbox" checked={github.autoPush} onChange={(e) => setGithub({ autoPush: e.target.checked })} /> Auto-push GitHub
             </label>
           </>)}
         </>)}
@@ -138,7 +143,7 @@ function SidePanel() {
 
       <div className="panel-section">
         <h2>Konektor</h2>
-        <p className="help-text"><code>SEND_EMAIL: to | subject | body</code> · <code>SEND_TELEGRAM: pesan</code></p>
+        <p className="help-text"><code>SEND_TELEGRAM: pesan</code> · <code>SEND_EMAIL: to | subject | body</code></p>
         <input type="text" value={connectors.gmailClientId} onChange={(e) => setConnectors({ gmailClientId: e.target.value })} placeholder="Gmail OAuth Client ID" />
         <div className="row-actions">
           <button className="btn-ghost" disabled={!connectors.gmailClientId.trim()} onClick={async () => {
@@ -156,12 +161,12 @@ function SidePanel() {
         <h2>Tugas</h2>
         <label className="row-actions">
           <input type="checkbox" checked={powerMode} onChange={(e) => setPowerMode(e.target.checked)} />
-          <span>⚡ Full Power (konteks lebih luas, token lebih besar, agent senior)</span>
+          <span>⚡ Full Power + multi-API + riset online</span>
         </label>
-        <textarea value={task} onChange={(e) => setTask(e.target.value)} placeholder={github.repoFullName ? `Tugas untuk ${github.repoFullName}...` : 'Hubungkan GitHub dulu'} rows={3}
+        <textarea value={task} onChange={(e) => setTask(e.target.value)} placeholder={github.repoFullName ? 'Contoh: buat dashboard realisasi anggaran online' : 'Hubungkan GitHub dulu'} rows={3}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleRun() }} />
         <button className="btn btn-primary" disabled={isRunning || !task.trim() || !config.apiKey || !github.repoFullName} onClick={handleRun}>
-          {isRunning ? 'Agent bekerja...' : powerMode ? '⚡ Jalankan Full Power' : 'Kirim ke Tim AI'}
+          {isRunning ? 'Agent bekerja...' : '⚡ Jalankan'}
         </button>
       </div>
 
@@ -191,10 +196,7 @@ function SidePanel() {
               <button className="btn-ghost" disabled={!artifacts.length} onClick={() => clearArtifacts()}>Clear</button>
             </div>
             {artifacts.map((a) => (
-              <div key={a.id} className="file-item">
-                <span>{a.action === 'delete' ? '🗑️' : '📄'}</span>
-                <code>{a.filename}</code>
-              </div>
+              <div key={a.id} className="file-item"><span>{a.action === 'delete' ? '🗑️' : '📄'}</span><code>{a.filename}</code></div>
             ))}
           </div>
         )}
@@ -209,7 +211,7 @@ export default function App() {
       <div className="office-wrap">
         <div className="office-header">
           <h1>Virtual Office AI</h1>
-          <p>Full Power · Multi-agent · GitHub · Konektor</p>
+          <p>Multi-API · Riset online · Hosting otonom · Konektor</p>
         </div>
         <OfficeFloor />
       </div>
