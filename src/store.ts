@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { Agent, AppConfig, Artifact, GitHubSettings, Message, RepoInfo } from './types'
 import { callLLM, extractArtifacts, paceBetweenAgents } from './llm'
-import { getAuthenticatedUser, listAllRepos, loadProjectContext, pushMany, createRepo, listRepoFiles, type GitHubConfig } from './github'
+import { getAuthenticatedUser, listAllRepos, loadProjectContext, pushMany, createRepo, listRepoFiles, deleteManyFiles, type GitHubConfig } from './github'
 
 const defaultAgents: Agent[] = [
   { id: 'manager', name: 'Budi', role: 'Project Manager', color: '#3b82f6', emoji: '👔', status: 'idle', currentTask: '', lastMessage: 'Siap!', x: 18, y: 42 },
@@ -26,18 +26,23 @@ function loadGH(): GitHubSettings {
   }
 }
 
-/** Deteksi niat user secara deterministik (tidak hanya andalkan LLM) */
 function detectBulkDeleteAll(task: string): boolean {
-  const t = task.toLowerCase()
+  const t = task.toLowerCase().replace(/\s+/g, ' ')
   const patterns = [
     /hapus\s+semua\s+file/,
     /hapus\s+seluruh\s+file/,
+    /hapus\s+semua\s+isi/,
+    /hapus\s+semua/,
+    /hapus\s+file[- ]?file/,
     /delete\s+all\s+files?/,
     /remove\s+all\s+files?/,
     /kosongkan\s+(repo|repository)/,
     /bersihkan\s+(semua\s+)?(isi\s+)?repo/,
+    /bersihkan\s+repo/,
     /wipe\s+(the\s+)?repo/,
-    /hapus\s+semua\s+isi/,
+    /clear\s+(the\s+)?repo/,
+    /hapus\s+semua\s+output/,
+    /hapus\s+file\s+output/,
   ]
   return patterns.some((p) => p.test(t))
 }
@@ -255,21 +260,26 @@ export const useStore = create<Store>((set, get) => ({
             files.slice(0, 40).join(', ') +
             (files.length > 40 ? ` ... (+${files.length - 40})` : '')
         )
-        addArtifacts(
-          files.map((path) => ({
-            filename: path,
-            language: 'delete',
-            content: '',
-            agentId: 'manager',
-            action: 'delete' as const,
-          }))
+        addMessage('System', `Menjalankan hapus massal ${files.length} file ke GitHub (satu per satu)...`)
+        updateAgent('coder', { status: 'working', currentTask: `Hapus 0/${files.length}` })
+        const { deleted, errors } = await deleteManyFiles(cfgNow, files, 'Virtual Office AI: hapus')
+        if (deleted.length) {
+          addMessage('System', `Berhasil dihapus (${deleted.length}): ${deleted.slice(0, 30).join(', ')}${deleted.length > 30 ? '...' : ''}`)
+        }
+        if (errors.length) {
+          addMessage('System', `Gagal hapus (${errors.length}): ${errors.slice(0, 10).join('; ')}`)
+        }
+        const remaining = await listRepoFiles(cfgNow, 500)
+        updateAgent('manager', {
+          status: 'done',
+          lastMessage: `Dihapus ${deleted.length}, sisa ${remaining.length}`,
+          currentTask: 'Selesai',
+        })
+        updateAgent('coder', { status: 'done', lastMessage: `Hapus ${deleted.length} file`, currentTask: 'Selesai' })
+        addMessage(
+          'System',
+          `Selesai hapus massal di ${ghNow.repoFullName}. Terhapus: ${deleted.length}. Sisa file: ${remaining.length}${remaining.length ? ' → ' + remaining.slice(0, 15).join(', ') : ' (repo kosong).'}`
         )
-        updateAgent('coder', { status: 'working', currentTask: 'Eksekusi hapus...' })
-        addMessage('System', 'Menjalankan hapus massal ke GitHub...')
-        await get().pushArtifactsToGithub()
-        updateAgent('manager', { status: 'done', lastMessage: `Dihapus ${files.length} file`, currentTask: 'Selesai' })
-        updateAgent('coder', { status: 'done', lastMessage: 'Hapus selesai', currentTask: 'Selesai' })
-        addMessage('System', `Selesai: perintah hapus semua file di ${ghNow.repoFullName} telah dieksekusi.`)
       } catch (e: unknown) {
         addMessage('System', 'Gagal hapus massal: ' + (e instanceof Error ? e.message : String(e)))
         updateAgent('manager', { status: 'error', lastMessage: 'Gagal hapus', currentTask: 'Error' })
@@ -284,18 +294,11 @@ export const useStore = create<Store>((set, get) => ({
     if (explicit.length && /^(delete|hapus|remove)/i.test(userTask.trim()) && userTask.length < 500) {
       const onlyDelete = !/(buat|create|tulis|update|tambah|fix)/i.test(userTask)
       if (onlyDelete) {
-        addArtifacts(
-          explicit.map((path) => ({
-            filename: path,
-            language: 'delete',
-            content: '',
-            agentId: 'manager',
-            action: 'delete' as const,
-          }))
-        )
         addMessage('System', `Menghapus file: ${explicit.join(', ')}`)
         try {
-          await get().pushArtifactsToGithub()
+          const { deleted, errors } = await deleteManyFiles(cfgNow, explicit, 'Virtual Office AI: hapus')
+          if (deleted.length) addMessage('System', 'Terhapus: ' + deleted.join(', '))
+          if (errors.length) addMessage('System', 'Gagal: ' + errors.join('; '))
         } catch (e: unknown) {
           addMessage('System', 'Gagal: ' + (e instanceof Error ? e.message : String(e)))
         } finally {
@@ -326,7 +329,7 @@ export const useStore = create<Store>((set, get) => ({
       updateAgent('manager', { status: 'thinking', currentTask: 'Merencanakan...' })
       const plan = await callLLM(
         config,
-        `Kamu Budi, PM. Bahasa Indonesia. Target: ${github.repoFullName}. Format: ## Analisis ## Rencana ## Penugasan ## File ## Hapus. Boleh update & HAPUS file repo. Hapus: tulis DELETE: path/file`,
+        `Kamu Budi, PM. Bahasa Indonesia. Target: ${github.repoFullName}. Format: ## Analisis ## Rencana ## Penugasan ## File ## Hapus.`,
         userTask + contextBlock,
         900
       )
@@ -339,22 +342,17 @@ export const useStore = create<Store>((set, get) => ({
         {
           id: 'coder',
           name: 'Andi',
-          system: `Kamu Andi, Software Engineer. Repo ${github.repoFullName}.
-Kamu BISA menambah, mengubah, dan MENGHAPUS file di repo.
-Format tulis file:\n\`\`\`html:index.html\n...isi...\n\`\`\`
-Format HAPUS file:\n\`\`\`delete:path/file\n\`\`\`
-atau: DELETE: nama-file.ext
-JANGAN pakai output-coder-*. Bahasa Indonesia singkat.`,
+          system: `Kamu Andi, Engineer. Repo ${github.repoFullName}. Format file: \`\`\`html:index.html ... \`\`\`. Hapus: DELETE: path atau \`\`\`delete:path\`\`\``,
         },
         {
           id: 'researcher',
           name: 'Siti',
-          system: `Kamu Siti. Output:\n\`\`\`md:docs/analysis.md\n...\n\`\`\`\nBoleh: DELETE: path/file`,
+          system: `Kamu Siti. Output \`\`\`md:docs/analysis.md\`\`\``,
         },
         {
           id: 'writer',
           name: 'Rina',
-          system: `Kamu Rina. Output:\n\`\`\`md:README.md\n...\n\`\`\`\nBoleh: DELETE: file-lama.ext`,
+          system: `Kamu Rina. Output \`\`\`md:README.md\`\`\``,
         },
       ]
       const results: string[] = []
@@ -388,7 +386,7 @@ JANGAN pakai output-coder-*. Bahasa Indonesia singkat.`,
       updateAgent('manager', { status: 'thinking', currentTask: 'Laporan...' })
       const summary = await callLLM(
         config,
-        'Kamu Budi. Laporan singkat + daftar file diubah/dihapus (Bahasa Indonesia).',
+        'Kamu Budi. Laporan singkat (Bahasa Indonesia).',
         `Tugas: ${userTask.slice(0, 800)}\n\n${results.join('\n').slice(0, 4000)}`,
         800
       )
@@ -433,10 +431,7 @@ JANGAN pakai output-coder-*. Bahasa Indonesia singkat.`,
       if (ok.length) parts.push('Update/tambah: ' + ok.join(', '))
       if (deleted?.length) parts.push('Hapus: ' + deleted.join(', '))
       if (parts.length) {
-        addMessage(
-          'System',
-          `Push ke ${github.repoFullName}\n${parts.join('\n')}\nhttps://github.com/${github.owner}/${github.repo}`
-        )
+        addMessage('System', `Push ke ${github.repoFullName}\n${parts.join('\n')}\nhttps://github.com/${github.owner}/${github.repo}`)
       }
       if (errors.length) addMessage('System', 'Gagal: ' + errors.join('; '))
     } finally {
