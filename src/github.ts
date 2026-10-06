@@ -228,7 +228,14 @@ export async function deleteFile(config: GitHubConfig, path: string, message: st
   })
 }
 
-/** Kosongkan branch dengan commit tree kosong — hapus semua file sekaligus */
+/** SHA tree kosong Git yang sudah dikenal (valid di semua repo) */
+const GIT_EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
+/**
+ * Kosongkan branch:
+ * 1) Commit ke tree kosong Git (SHA tetap)
+ * 2) Fallback: tree baru hanya README.md (tanpa base_tree = ganti seluruh isi)
+ */
 export async function emptyRepoBranch(
   config: GitHubConfig,
   message = 'Virtual Office AI: kosongkan repo'
@@ -239,24 +246,47 @@ export async function emptyRepoBranch(
   const ref = await ghJson<{ object: { sha: string } }>(config.token, `${base}/git/ref/heads/${branch}`)
   const latestCommitSha = ref.object.sha
 
-  const emptyTree = await ghJson<{ sha: string }>(config.token, `${base}/git/trees`, {
-    method: 'POST',
-    body: JSON.stringify({ tree: [] }),
-  })
-
-  const newCommit = await ghJson<{ sha: string }>(config.token, `${base}/git/commits`, {
-    method: 'POST',
-    body: JSON.stringify({
-      message: message.slice(0, 200),
-      tree: emptyTree.sha,
-      parents: [latestCommitSha],
-    }),
-  })
-
-  await ghJson(config.token, `${base}/git/refs/heads/${branch}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ sha: newCommit.sha }),
-  })
+  try {
+    const newCommit = await ghJson<{ sha: string }>(config.token, `${base}/git/commits`, {
+      method: 'POST',
+      body: JSON.stringify({
+        message: message.slice(0, 200),
+        tree: GIT_EMPTY_TREE_SHA,
+        parents: [latestCommitSha],
+      }),
+    })
+    await ghJson(config.token, `${base}/git/refs/heads/${branch}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ sha: newCommit.sha }),
+    })
+    return
+  } catch {
+    const readmeTree = await ghJson<{ sha: string }>(config.token, `${base}/git/trees`, {
+      method: 'POST',
+      body: JSON.stringify({
+        tree: [
+          {
+            path: 'README.md',
+            mode: '100644',
+            type: 'blob',
+            content: '# Repo dikosongkan\n\nDibersihkan oleh Virtual Office AI.\n',
+          },
+        ],
+      }),
+    })
+    const newCommit = await ghJson<{ sha: string }>(config.token, `${base}/git/commits`, {
+      method: 'POST',
+      body: JSON.stringify({
+        message: message.slice(0, 200),
+        tree: readmeTree.sha,
+        parents: [latestCommitSha],
+      }),
+    })
+    await ghJson(config.token, `${base}/git/refs/heads/${branch}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ sha: newCommit.sha }),
+    })
+  }
 }
 
 export async function deleteManyFiles(
@@ -268,47 +298,13 @@ export async function deleteManyFiles(
   if (!unique.length) return { deleted: [], errors: [] }
 
   try {
-    const all = await listRepoFiles(config, 500)
-    if (all.length > 0 && unique.length >= all.length) {
-      await emptyRepoBranch(config, `${messagePrefix} semua (${all.length} file)`)
-      return { deleted: all, errors: [] }
-    }
-  } catch {
-    /* continue */
-  }
-
-  try {
     await emptyRepoBranch(config, `${messagePrefix} ${unique.length} file`)
     return { deleted: unique, errors: [] }
   } catch (e: unknown) {
-    const deleted: string[] = []
-    const errors: string[] = [`Empty-tree gagal: ${e instanceof Error ? e.message : String(e)}`]
-    const branch = config.branch || 'main'
-    for (const path of unique) {
-      try {
-        const existing = await getFile(config, path)
-        if (!existing?.sha) {
-          deleted.push(path)
-          continue
-        }
-        const encoded = path.split('/').map(encodeURIComponent).join('/')
-        await ghJson(config.token, `/repos/${config.owner}/${config.repo}/contents/${encoded}`, {
-          method: 'DELETE',
-          body: JSON.stringify({
-            message: `${messagePrefix} ${path}`.slice(0, 200),
-            sha: existing.sha,
-            branch,
-          }),
-        })
-        deleted.push(path)
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err)
-        if (/404|Not Found/i.test(msg)) deleted.push(path)
-        else errors.push(`${path}: ${msg}`)
-      }
-      await sleep(300)
+    return {
+      deleted: [],
+      errors: [`Gagal kosongkan repo: ${e instanceof Error ? e.message : String(e)}`],
     }
-    return { deleted, errors }
   }
 }
 
