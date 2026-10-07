@@ -158,31 +158,81 @@ export function extractArtifacts(text: string, agentId: string): { cleanText: st
 }
 
 export const PROVIDERS = {
-  groq: {
-    name: 'Groq (Recommended)',
-    baseUrl: 'https://api.groq.com/openai/v1',
-    models: ['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'llama-3.1-8b-instant'],
-    help: 'Primary cepat. Isi API Key #2 + key tambahan untuk fallback.',
-  },
   gemini: {
-    name: 'Google AI Studio',
+    name: '1. Google AI Studio (default)',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     models: ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'],
-    help: 'https://aistudio.google.com/apikey — model gemini-3.8-flash',
+    help: 'Gratis · aistudio.google.com/apikey · model: gemini-3.8-flash',
+  },
+  groq: {
+    name: '2. Groq (cepat)',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    models: ['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'llama-3.1-8b-instant'],
+    help: 'Gratis · console.groq.com/keys',
   },
   openrouter: {
-    name: 'OpenRouter',
+    name: '3. OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
     models: ['openrouter/free', 'google/gemini-2.0-flash-exp:free', 'openai/gpt-oss-120b:free'],
-    help: 'https://openrouter.ai — model :free',
+    help: 'Gratis · openrouter.ai/keys · model :free',
   },
   custom: {
-    name: 'Custom',
+    name: '4. Custom',
     baseUrl: 'https://api.openai.com/v1',
     models: ['gpt-4o-mini'],
     help: 'Base URL & model sendiri',
   },
 } as const
+
+/** Setup cepat: set API utama (+ opsional #2) dalam satu klik */
+export const SETUP_PRESETS = {
+  gemini: {
+    name: 'Google AI Studio (disarankan gratis)',
+    primary: {
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      model: 'gemini-3.8-flash',
+    },
+    secondary: {
+      baseUrl: 'https://api.groq.com/openai/v1',
+      model: 'openai/gpt-oss-20b',
+    },
+    help: 'Key: aistudio.google.com/apikey · Model utama: gemini-3.8-flash',
+  },
+  groq: {
+    name: 'Groq (cepat)',
+    primary: {
+      baseUrl: 'https://api.groq.com/openai/v1',
+      model: 'openai/gpt-oss-20b',
+    },
+    secondary: {
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      model: 'gemini-3.8-flash',
+    },
+    help: 'Key: console.groq.com/keys',
+  },
+  openrouter: {
+    name: 'OpenRouter (banyak model free)',
+    primary: {
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'openrouter/free',
+    },
+    secondary: {
+      baseUrl: 'https://api.groq.com/openai/v1',
+      model: 'openai/gpt-oss-20b',
+    },
+    help: 'Key: openrouter.ai/keys · model harus :free',
+  },
+} as const
+
+export type SetupPresetId = keyof typeof SETUP_PRESETS
+
+export function detectProviderFromBaseUrl(baseUrl: string): keyof typeof PROVIDERS {
+  const u = (baseUrl || '').toLowerCase()
+  if (u.includes('generativelanguage.googleapis.com')) return 'gemini'
+  if (u.includes('openrouter.ai')) return 'openrouter'
+  if (u.includes('groq.com')) return 'groq'
+  return 'custom'
+}
 
 export async function callLLMMulti(
   config: AppConfig,
