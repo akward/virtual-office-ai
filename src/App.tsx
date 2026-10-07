@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useStore } from './store'
 import { PROVIDERS, SETUP_PRESETS, detectProviderFromBaseUrl, type SetupPresetId } from './llm'
-import { loadSupabaseConfig, saveSupabaseConfig, testSupabaseConnection } from './supabase'
+import { loadSupabaseConfig, saveSupabaseConfig, testSupabaseConnection, DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_ANON_KEY } from './supabase'
 import './App.css'
 
 function downloadFile(filename: string, content: string) {
@@ -67,8 +67,8 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
   const [newRepoPrivate, setNewRepoPrivate] = useState(false)
   const filteredRepos = repos.filter((r) => !repoFilter || r.full_name.toLowerCase().includes(repoFilter.toLowerCase()))
   const extras = config.extraKeys || []
-  const [sbUrl, setSbUrl] = useState(() => loadSupabaseConfig().url || 'https://iqkngxkaqogxzemwsits.supabase.co')
-  const [sbKey, setSbKey] = useState(() => loadSupabaseConfig().anonKey)
+  const [sbUrl, setSbUrl] = useState(() => loadSupabaseConfig().url || DEFAULT_SUPABASE_URL)
+  const [sbKey, setSbKey] = useState(() => loadSupabaseConfig().anonKey || DEFAULT_SUPABASE_ANON_KEY)
   const [sbMsg, setSbMsg] = useState('')
 
   return (
@@ -109,10 +109,10 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
           <label className="field-label">Model #1</label>
           <input value={config.model} onChange={(e) => setConfig({ model: e.target.value })} />
           <p className="help-text">{PROVIDERS[provider]?.help}</p>
-          <label className="field-label">API Key #2 (fallback)</label>
-          <input type="password" value={config.apiKey2 || ''} onChange={(e) => setConfig({ apiKey2: e.target.value })} />
-          <input value={config.baseUrl2 || ''} onChange={(e) => setConfig({ baseUrl2: e.target.value })} placeholder="Base URL #2" />
-          <input value={config.model2 || ''} onChange={(e) => setConfig({ model2: e.target.value })} placeholder="Model #2" />
+          <label className="field-label">API Key #2 (fallback / OpenRouter)</label>
+          <input type="password" value={config.apiKey2 || ''} onChange={(e) => setConfig({ apiKey2: e.target.value })} placeholder="sk-or-v1-..." />
+          <input value={config.baseUrl2 || ''} onChange={(e) => setConfig({ baseUrl2: e.target.value })} placeholder="https://openrouter.ai/api/v1" />
+          <input value={config.model2 || ''} onChange={(e) => setConfig({ model2: e.target.value })} placeholder="openrouter/free" />
           <label className="field-label">API Key tambahan</label>
           {extras.map((ek, idx) => (
             <div key={ek.id} style={{ border: '1px solid #333', borderRadius: 8, padding: '0.5rem', marginBottom: '0.5rem' }}>
@@ -135,11 +135,11 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
 
         <section className="side-block">
           <h3>Database (Supabase)</h3>
-          <p className="help-text">Prioritas: <b>Supabase</b>, fallback GitHub. Tabel <code>vo_settings</code> + <code>vo_tasks</code>.</p>
+          <p className="help-text">Project baru: <b>virtual-office-ai</b> · tabel <code>vo_settings</code> + <code>vo_tasks</code>. URL & key sudah terisi default.</p>
           <label className="field-label">Supabase URL</label>
           <input value={sbUrl} onChange={(e) => setSbUrl(e.target.value)} placeholder="https://xxxx.supabase.co" />
           <label className="field-label">Anon Key</label>
-          <input type="password" value={sbKey} onChange={(e) => setSbKey(e.target.value)} placeholder="eyJ... atau sb_publishable_..." />
+          <input type="password" value={sbKey} onChange={(e) => setSbKey(e.target.value)} placeholder="eyJ..." />
           <div className="row-actions" style={{ flexWrap: 'wrap', gap: 4 }}>
             <button type="button" className="btn-ghost" onClick={() => {
               saveSupabaseConfig({ url: sbUrl, anonKey: sbKey })
@@ -274,7 +274,7 @@ function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) 
           ))}
         </div>
       )}
-      {!config.apiKey && <p className="help-text" style={{ padding: '0.5rem' }}>Pilih ⭐ Gemini, isi API Key, lalu simpan ke Database.</p>}
+      {!config.apiKey && <p className="help-text" style={{ padding: '0.5rem' }}>Isi API Key LLM · Database Supabase sudah default.</p>}
     </aside>
   )
 }
@@ -294,7 +294,7 @@ export default function App() {
       <main className="main-stage">
         <div className="office-header">
           <h1>Virtual Office AI</h1>
-          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings → API + Database Supabase'}</p>
+          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'DB: virtual-office-ai (Supabase)'}</p>
         </div>
         <OfficeFloor />
       </main>
