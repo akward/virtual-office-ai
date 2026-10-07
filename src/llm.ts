@@ -162,13 +162,13 @@ export const PROVIDERS = {
     name: 'Groq (Recommended)',
     baseUrl: 'https://api.groq.com/openai/v1',
     models: ['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'llama-3.1-8b-instant'],
-    help: 'Primary cepat. Isi API Key #2 (OpenRouter/Gemini) untuk multi-model.',
+    help: 'Primary cepat. Isi API Key #2 + key tambahan untuk fallback.',
   },
   gemini: {
     name: 'Google AI Studio',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     models: ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'],
-    help: 'https://aistudio.google.com/apikey — pakai model gemini-3.8-flash',
+    help: 'https://aistudio.google.com/apikey — model gemini-3.8-flash',
   },
   openrouter: {
     name: 'OpenRouter',
@@ -190,17 +190,33 @@ export async function callLLMMulti(
   userMessage: string,
   maxTokens = 2000
 ): Promise<{ text: string; used: string }> {
-  try {
-    const text = await callLLM(config, systemPrompt, userMessage, maxTokens)
-    return { text, used: config.model }
-  } catch (e: unknown) {
-    if (config.apiKey2 && config.baseUrl2 && config.model2) {
-      const alt: AppConfig = { ...config, apiKey: config.apiKey2, baseUrl: config.baseUrl2, model: config.model2 }
-      const text = await callLLM(alt, systemPrompt, userMessage, maxTokens)
-      return { text, used: config.model2 + ' (fallback)' }
-    }
-    throw e instanceof Error ? e : new Error(String(e))
+  const chain: { label: string; cfg: AppConfig }[] = [
+    { label: config.model || 'primary', cfg: config },
+  ]
+  if (config.apiKey2 && config.baseUrl2 && config.model2) {
+    chain.push({
+      label: config.model2 + ' (#2)',
+      cfg: { ...config, apiKey: config.apiKey2, baseUrl: config.baseUrl2, model: config.model2 },
+    })
   }
+  for (const extra of config.extraKeys || []) {
+    if (extra.apiKey?.trim() && extra.baseUrl?.trim() && extra.model?.trim()) {
+      chain.push({
+        label: (extra.label || extra.model) + ' (extra)',
+        cfg: { ...config, apiKey: extra.apiKey, baseUrl: extra.baseUrl, model: extra.model },
+      })
+    }
+  }
+  let lastErr: unknown = null
+  for (const item of chain) {
+    try {
+      const text = await callLLM(item.cfg, systemPrompt, userMessage, maxTokens)
+      return { text, used: item.label }
+    } catch (e: unknown) {
+      lastErr = e
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr || 'Semua API key gagal'))
 }
 
 export async function callLLMEnsemble(
