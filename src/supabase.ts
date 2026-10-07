@@ -5,13 +5,18 @@ export type SupabaseConfig = {
   anonKey: string
 }
 
+/** Default project: virtual-office-ai (baru, bukan realisasi-anggaran) */
+export const DEFAULT_SUPABASE_URL = 'https://pwqpummgalevnamjrvnb.supabase.co'
+export const DEFAULT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3cXB1bW1nYWxldm5hbWpydm5iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzODQ5ODEsImV4cCI6MjEwNjk2MDk4MX0.kofVsZ9JYUwGgYFUMmxTxRnNhevnLfG_PLBt_Rta1Vk'
+
 export function loadSupabaseConfig(): SupabaseConfig {
   if (typeof localStorage === 'undefined') {
-    return { url: '', anonKey: '' }
+    return { url: DEFAULT_SUPABASE_URL, anonKey: DEFAULT_SUPABASE_ANON_KEY }
   }
   return {
-    url: (localStorage.getItem('vo_sb_url') || '').replace(/\/$/, ''),
-    anonKey: localStorage.getItem('vo_sb_key') || '',
+    url: (localStorage.getItem('vo_sb_url') || DEFAULT_SUPABASE_URL).replace(/\/$/, ''),
+    anonKey: localStorage.getItem('vo_sb_key') || DEFAULT_SUPABASE_ANON_KEY,
   }
 }
 
@@ -106,5 +111,5 @@ export async function testSupabaseConnection(cfg: SupabaseConfig): Promise<strin
     const t = await res.text()
     throw new Error(`Koneksi gagal ${res.status}: ${t.slice(0, 180)}`)
   }
-  return 'OK — tabel vo_settings dapat diakses'
+  return 'OK — project virtual-office-ai · tabel vo_settings siap'
 }
