@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useStore } from './store'
 import { PROVIDERS, SETUP_PRESETS, detectProviderFromBaseUrl, type SetupPresetId } from './llm'
+import { loadSupabaseConfig, saveSupabaseConfig, testSupabaseConnection } from './supabase'
 import './App.css'
 
 function downloadFile(filename: string, content: string) {
@@ -54,20 +55,21 @@ function OfficeFloor() {
 
 function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const {
-    config, github, repos, isLoadingRepos, isCreatingRepo, isRunning,
+    config, github, repos, isLoadingRepos, isCreatingRepo,
     setConfig, setGithub, connectWithToken, selectRepo, createNewRepo, addMessage,
-    connectors, setConnectors, connectGmail, powerMode, setPowerMode, runTask,
+    connectors, setConnectors, connectGmail, powerMode, setPowerMode,
     agentMemory, teachAgent, clearMemory,
     saveToBackend, loadFromBackend, isSyncingSettings,
   } = useStore()
-  const [provider, setProvider] = useState<keyof typeof PROVIDERS>(() =>
-    detectProviderFromBaseUrl(config.baseUrl)
-  )
+  const [provider, setProvider] = useState<keyof typeof PROVIDERS>(() => detectProviderFromBaseUrl(config.baseUrl))
   const [repoFilter, setRepoFilter] = useState('')
   const [newRepoName, setNewRepoName] = useState('')
   const [newRepoPrivate, setNewRepoPrivate] = useState(false)
   const filteredRepos = repos.filter((r) => !repoFilter || r.full_name.toLowerCase().includes(repoFilter.toLowerCase()))
   const extras = config.extraKeys || []
+  const [sbUrl, setSbUrl] = useState(() => loadSupabaseConfig().url || 'https://iqkngxkaqogxzemwsits.supabase.co')
+  const [sbKey, setSbKey] = useState(() => loadSupabaseConfig().anonKey)
+  const [sbMsg, setSbMsg] = useState('')
 
   return (
     <aside className={`sidebar sidebar-left ${open ? 'open' : 'collapsed'}`}>
@@ -81,22 +83,13 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
           <p className="help-text">Pilih setup default, lalu tempel API Key.</p>
           <div className="row-actions" style={{ flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
             {(Object.keys(SETUP_PRESETS) as SetupPresetId[]).map((id) => (
-              <button
-                key={id}
-                type="button"
-                className="btn-ghost"
+              <button key={id} type="button" className="btn-ghost"
                 style={detectProviderFromBaseUrl(config.baseUrl) === id ? { outline: '2px solid #3b82f6', fontWeight: 600 } : undefined}
                 onClick={() => {
                   const pre = SETUP_PRESETS[id]
                   setProvider(id === 'gemini' || id === 'groq' || id === 'openrouter' ? id : 'custom')
-                  setConfig({
-                    baseUrl: pre.primary.baseUrl,
-                    model: pre.primary.model,
-                    baseUrl2: pre.secondary.baseUrl,
-                    model2: pre.secondary.model,
-                  })
-                }}
-              >
+                  setConfig({ baseUrl: pre.primary.baseUrl, model: pre.primary.model, baseUrl2: pre.secondary.baseUrl, model2: pre.secondary.model })
+                }}>
                 {id === 'gemini' ? '⭐ Gemini' : id === 'groq' ? '⚡ Groq' : '🔀 OpenRouter'}
               </button>
             ))}
@@ -123,18 +116,10 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
           <label className="field-label">API Key tambahan</label>
           {extras.map((ek, idx) => (
             <div key={ek.id} style={{ border: '1px solid #333', borderRadius: 8, padding: '0.5rem', marginBottom: '0.5rem' }}>
-              <input value={ek.label} onChange={(e) => {
-                const next = [...extras]; next[idx] = { ...ek, label: e.target.value }; setConfig({ extraKeys: next })
-              }} placeholder="Label" />
-              <input type="password" value={ek.apiKey} onChange={(e) => {
-                const next = [...extras]; next[idx] = { ...ek, apiKey: e.target.value }; setConfig({ extraKeys: next })
-              }} placeholder="API Key" />
-              <input value={ek.baseUrl} onChange={(e) => {
-                const next = [...extras]; next[idx] = { ...ek, baseUrl: e.target.value }; setConfig({ extraKeys: next })
-              }} placeholder="Base URL" />
-              <input value={ek.model} onChange={(e) => {
-                const next = [...extras]; next[idx] = { ...ek, model: e.target.value }; setConfig({ extraKeys: next })
-              }} placeholder="Model" />
+              <input value={ek.label} onChange={(e) => { const next = [...extras]; next[idx] = { ...ek, label: e.target.value }; setConfig({ extraKeys: next }) }} placeholder="Label" />
+              <input type="password" value={ek.apiKey} onChange={(e) => { const next = [...extras]; next[idx] = { ...ek, apiKey: e.target.value }; setConfig({ extraKeys: next }) }} placeholder="API Key" />
+              <input value={ek.baseUrl} onChange={(e) => { const next = [...extras]; next[idx] = { ...ek, baseUrl: e.target.value }; setConfig({ extraKeys: next }) }} placeholder="Base URL" />
+              <input value={ek.model} onChange={(e) => { const next = [...extras]; next[idx] = { ...ek, model: e.target.value }; setConfig({ extraKeys: next }) }} placeholder="Model" />
               <button type="button" className="btn-ghost" onClick={() => setConfig({ extraKeys: extras.filter((x) => x.id !== ek.id) })}>✕ Hapus</button>
             </div>
           ))}
@@ -149,19 +134,34 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
         </section>
 
         <section className="side-block">
-          <h3>Backend (simpan pengaturan)</h3>
-          <p className="help-text">
-            Disimpan ke repo privat <code>vo-user-settings</code> di GitHub (settings.json).
-            Termasuk API key. Wajib login GitHub.
-          </p>
-          <button type="button" className="btn-ghost" disabled={isSyncingSettings || !github.token.trim()} onClick={async () => {
+          <h3>Database (Supabase)</h3>
+          <p className="help-text">Prioritas: <b>Supabase</b>, fallback GitHub. Tabel <code>vo_settings</code> + <code>vo_tasks</code>.</p>
+          <label className="field-label">Supabase URL</label>
+          <input value={sbUrl} onChange={(e) => setSbUrl(e.target.value)} placeholder="https://xxxx.supabase.co" />
+          <label className="field-label">Anon Key</label>
+          <input type="password" value={sbKey} onChange={(e) => setSbKey(e.target.value)} placeholder="eyJ... atau sb_publishable_..." />
+          <div className="row-actions" style={{ flexWrap: 'wrap', gap: 4 }}>
+            <button type="button" className="btn-ghost" onClick={() => {
+              saveSupabaseConfig({ url: sbUrl, anonKey: sbKey })
+              setSbMsg('Kredensial disimpan di browser.')
+            }}>💾 Simpan kredensial</button>
+            <button type="button" className="btn-ghost" onClick={async () => {
+              saveSupabaseConfig({ url: sbUrl, anonKey: sbKey })
+              try { setSbMsg(await testSupabaseConnection({ url: sbUrl.replace(/\/$/, ''), anonKey: sbKey })) }
+              catch (e: unknown) { setSbMsg(String(e)) }
+            }}>🔌 Test</button>
+          </div>
+          {sbMsg && <p className="help-text">{sbMsg}</p>}
+          <button type="button" className="btn-ghost" disabled={isSyncingSettings} onClick={async () => {
+            saveSupabaseConfig({ url: sbUrl, anonKey: sbKey })
             try { await saveToBackend({ includeGithubToken: true }) }
             catch (e: unknown) { addMessage('System', String(e)) }
-          }}>{isSyncingSettings ? 'Menyimpan...' : '☁️ Simpan ke backend'}</button>
-          <button type="button" className="btn-ghost" disabled={isSyncingSettings || !github.token.trim()} onClick={async () => {
+          }}>{isSyncingSettings ? 'Menyimpan...' : '☁️ Simpan ke database'}</button>
+          <button type="button" className="btn-ghost" disabled={isSyncingSettings} onClick={async () => {
+            saveSupabaseConfig({ url: sbUrl, anonKey: sbKey })
             try { await loadFromBackend() }
             catch (e: unknown) { addMessage('System', String(e)) }
-          }}>{isSyncingSettings ? 'Memuat...' : '⬇️ Muat dari backend'}</button>
+          }}>{isSyncingSettings ? 'Memuat...' : '⬇️ Muat dari database'}</button>
         </section>
 
         <section className="side-block">
@@ -216,10 +216,7 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
 }
 
 function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const {
-    messages, artifacts, config, github, isRunning, isPushing,
-    runTask, clearArtifacts, pushArtifactsToGithub, addMessage, powerMode,
-  } = useStore()
+  const { messages, artifacts, config, github, isRunning, isPushing, runTask, clearArtifacts, pushArtifactsToGithub, addMessage, powerMode } = useStore()
   const [task, setTask] = useState('')
   const [tab, setTab] = useState<'log' | 'files'>('log')
   const [localBusy, setLocalBusy] = useState(false)
@@ -277,7 +274,7 @@ function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) 
           ))}
         </div>
       )}
-      {!config.apiKey && <p className="help-text" style={{ padding: '0.5rem' }}>Pilih ⭐ Gemini lalu isi API Key #1. Simpan ke backend agar tidak hilang.</p>}
+      {!config.apiKey && <p className="help-text" style={{ padding: '0.5rem' }}>Pilih ⭐ Gemini, isi API Key, lalu simpan ke Database.</p>}
     </aside>
   )
 }
@@ -297,7 +294,7 @@ export default function App() {
       <main className="main-stage">
         <div className="office-header">
           <h1>Virtual Office AI</h1>
-          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings → API + Backend'}</p>
+          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings → API + Database Supabase'}</p>
         </div>
         <OfficeFloor />
       </main>
