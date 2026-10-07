@@ -64,6 +64,7 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
   const [newRepoName, setNewRepoName] = useState('')
   const [newRepoPrivate, setNewRepoPrivate] = useState(false)
   const filteredRepos = repos.filter((r) => !repoFilter || r.full_name.toLowerCase().includes(repoFilter.toLowerCase()))
+  const extras = config.extraKeys || []
 
   return (
     <aside className={`sidebar sidebar-left ${open ? 'open' : 'collapsed'}`}>
@@ -86,11 +87,72 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
           <label className="field-label">Model #1</label>
           <input value={config.model} onChange={(e) => setConfig({ model: e.target.value })} />
           <p className="help-text">{PROVIDERS[provider]?.help}</p>
-          <label className="field-label">API Key #2 (multi)</label>
-          <input type="password" value={config.apiKey2 || ''} onChange={(e) => setConfig({ apiKey2: e.target.value })} placeholder="sk-or-v1-..." />
+          <label className="field-label">API Key #2 (fallback)</label>
+          <input type="password" value={config.apiKey2 || ''} onChange={(e) => setConfig({ apiKey2: e.target.value })} placeholder="sk-or-v1-... / AIza..." />
           <input value={config.baseUrl2 || ''} onChange={(e) => setConfig({ baseUrl2: e.target.value })} placeholder="https://openrouter.ai/api/v1" />
           <input value={config.model2 || ''} onChange={(e) => setConfig({ model2: e.target.value })} placeholder="model #2" />
-          <button className="btn-ghost" type="button" disabled={isRunning} onClick={() => runTask('sambungkan ke openrouter')}>🔗 OpenRouter (popup)</button>
+
+          <label className="field-label" style={{ marginTop: '0.75rem' }}>API Key tambahan</label>
+          <p className="help-text">Key #3, #4, ... dipakai otomatis jika #1/#2 gagal.</p>
+          {extras.map((ek, idx) => (
+            <div key={ek.id} style={{ border: '1px solid #333', borderRadius: 8, padding: '0.5rem', marginBottom: '0.5rem' }}>
+              <div className="row-actions" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
+                <input
+                  value={ek.label}
+                  onChange={(e) => {
+                    const next = [...extras]
+                    next[idx] = { ...ek, label: e.target.value }
+                    setConfig({ extraKeys: next })
+                  }}
+                  placeholder="Label"
+                  style={{ flex: 1 }}
+                />
+                <button type="button" className="btn-ghost" onClick={() => setConfig({ extraKeys: extras.filter((x) => x.id !== ek.id) })}>✕</button>
+              </div>
+              <input type="password" value={ek.apiKey} onChange={(e) => {
+                const next = [...extras]; next[idx] = { ...ek, apiKey: e.target.value }; setConfig({ extraKeys: next })
+              }} placeholder="API Key" />
+              <input value={ek.baseUrl} onChange={(e) => {
+                const next = [...extras]; next[idx] = { ...ek, baseUrl: e.target.value }; setConfig({ extraKeys: next })
+              }} placeholder="Base URL" />
+              <input value={ek.model} onChange={(e) => {
+                const next = [...extras]; next[idx] = { ...ek, model: e.target.value }; setConfig({ extraKeys: next })
+              }} placeholder="Model" />
+            </div>
+          ))}
+          <button type="button" className="btn-ghost" onClick={() => setConfig({
+            extraKeys: [...extras, {
+              id: crypto.randomUUID(),
+              label: `Key #${extras.length + 3}`,
+              apiKey: '',
+              baseUrl: 'https://api.groq.com/openai/v1',
+              model: 'openai/gpt-oss-20b',
+            }],
+          })}>➕ Tambah API Key</button>
+          <div className="row-actions" style={{ flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+            <button type="button" className="btn-ghost" onClick={() => setConfig({
+              extraKeys: [...extras, {
+                id: crypto.randomUUID(), label: 'Gemini', apiKey: '',
+                baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+                model: 'gemini-3.8-flash',
+              }],
+            })}>+ Gemini</button>
+            <button type="button" className="btn-ghost" onClick={() => setConfig({
+              extraKeys: [...extras, {
+                id: crypto.randomUUID(), label: 'OpenRouter', apiKey: '',
+                baseUrl: 'https://openrouter.ai/api/v1',
+                model: 'openrouter/free',
+              }],
+            })}>+ OpenRouter</button>
+            <button type="button" className="btn-ghost" onClick={() => setConfig({
+              extraKeys: [...extras, {
+                id: crypto.randomUUID(), label: 'Groq', apiKey: '',
+                baseUrl: 'https://api.groq.com/openai/v1',
+                model: 'openai/gpt-oss-20b',
+              }],
+            })}>+ Groq</button>
+          </div>
+
           <label className="field-label">Vercel Token</label>
           <input type="password" value={config.vercelToken || ''} onChange={(e) => setConfig({ vercelToken: e.target.value })} placeholder="vercel_..." />
           <button className="btn-ghost" type="button" disabled={isRunning} onClick={() => runTask('sambungkan ke vercel')}>🔗 Vercel (popup)</button>
@@ -101,35 +163,13 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
 
         <section className="side-block">
           <h3>Latih Agent</h3>
-          <p className="help-text">
-            Agent berpikir dulu sebelum kerja. Ajari dengan:
-            <br />« ingat bahwa jangan buat file output-* »
-            <br />« selalu bahasa Indonesia »
-            <br />« jangan lagi deploy tanpa saya minta »
-          </p>
-          <p className="help-text">
-            Memori: {agentMemory.prefs.length} preferensi, {agentMemory.lessons.length} pelajaran
-          </p>
-          {(agentMemory.prefs.length > 0 || agentMemory.lessons.length > 0) && (
-            <ul className="help-text" style={{ paddingLeft: '1.1rem', margin: '0.35rem 0' }}>
-              {agentMemory.prefs.slice(-5).map((x) => (
-                <li key={x}>📌 {x}</li>
-              ))}
-              {agentMemory.lessons.slice(-5).map((L) => (
-                <li key={L.id}>📚 {L.text}</li>
-              ))}
-            </ul>
-          )}
+          <p className="help-text">Ajari: « ingat bahwa ... » · « selalu bahasa Indonesia »</p>
+          <p className="help-text">Memori: {agentMemory.prefs.length} preferensi, {agentMemory.lessons.length} pelajaran</p>
           <button className="btn-ghost" type="button" onClick={() => {
-            const t = window.prompt('Pelajaran / preferensi untuk agent:')
-            if (t?.trim()) {
-              teachAgent(t.trim())
-              addMessage('System', '📚 Disimpan: ' + t.trim())
-            }
+            const t = window.prompt('Pelajaran / preferensi:')
+            if (t?.trim()) { teachAgent(t.trim()); addMessage('System', '📚 ' + t.trim()) }
           }}>➕ Tambah pelajaran</button>
-          <button className="btn-ghost" type="button" onClick={() => {
-            if (window.confirm('Hapus semua memori agent?')) clearMemory()
-          }}>🗑️ Reset memori</button>
+          <button className="btn-ghost" type="button" onClick={() => { if (window.confirm('Reset memori?')) clearMemory() }}>🗑️ Reset memori</button>
         </section>
 
         <section className="side-block">
@@ -204,7 +244,7 @@ function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) 
         <button className="btn btn-primary" disabled={isRunning || !task.trim()} onClick={handleRun}>
           {isRunning ? 'Agent bekerja...' : powerMode ? '⚡ Jalankan' : 'Kirim'}
         </button>
-        <p className="help-text">Ctrl+Enter · Agent berpikir dulu sebelum kerja</p>
+        <p className="help-text">Ctrl+Enter</p>
       </div>
       <div className="tabs">
         <button type="button" className={tab === 'log' ? 'active' : ''} onClick={() => setTab('log')}>Log</button>
@@ -261,7 +301,7 @@ export default function App() {
       <main className="main-stage">
         <div className="office-header">
           <h1>Virtual Office AI</h1>
-          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings kiri · Chat kanan · Agent berpikir dulu'}</p>
+          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings kiri · Chat kanan'}</p>
         </div>
         <OfficeFloor />
       </main>
