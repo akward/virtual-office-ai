@@ -58,6 +58,7 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
     setConfig, setGithub, connectWithToken, selectRepo, createNewRepo, addMessage,
     connectors, setConnectors, connectGmail, powerMode, setPowerMode, runTask,
     agentMemory, teachAgent, clearMemory,
+    saveToBackend, loadFromBackend, isSyncingSettings,
   } = useStore()
   const [provider, setProvider] = useState<keyof typeof PROVIDERS>(() =>
     detectProviderFromBaseUrl(config.baseUrl)
@@ -77,18 +78,14 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
       <div className="sidebar-scroll">
         <section className="side-block">
           <h3>LLM — API utama</h3>
-          <p className="help-text">Pilih setup default (mengisi Base URL + Model). Lalu tempel API Key.</p>
+          <p className="help-text">Pilih setup default, lalu tempel API Key.</p>
           <div className="row-actions" style={{ flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
             {(Object.keys(SETUP_PRESETS) as SetupPresetId[]).map((id) => (
               <button
                 key={id}
                 type="button"
                 className="btn-ghost"
-                style={
-                  detectProviderFromBaseUrl(config.baseUrl) === id
-                    ? { outline: '2px solid #3b82f6', fontWeight: 600 }
-                    : undefined
-                }
+                style={detectProviderFromBaseUrl(config.baseUrl) === id ? { outline: '2px solid #3b82f6', fontWeight: 600 } : undefined}
                 onClick={() => {
                   const pre = SETUP_PRESETS[id]
                   setProvider(id === 'gemini' || id === 'groq' || id === 'openrouter' ? id : 'custom')
@@ -98,9 +95,7 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
                     baseUrl2: pre.secondary.baseUrl,
                     model2: pre.secondary.model,
                   })
-                  if (typeof localStorage !== 'undefined') localStorage.setItem('vo_setup_preset', id)
                 }}
-                title={SETUP_PRESETS[id].help}
               >
                 {id === 'gemini' ? '⭐ Gemini' : id === 'groq' ? '⚡ Groq' : '🔀 OpenRouter'}
               </button>
@@ -111,33 +106,26 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
             const p = e.target.value as keyof typeof PROVIDERS
             setProvider(p)
             setConfig({ baseUrl: PROVIDERS[p].baseUrl, model: PROVIDERS[p].models[0] })
-            if (typeof localStorage !== 'undefined') localStorage.setItem('vo_setup_preset', p)
           }}>
             {Object.entries(PROVIDERS).map(([k, v]) => <option key={k} value={k}>{v.name}</option>)}
           </select>
-          <label className="field-label">API Key #1 (utama — dipakai pertama)</label>
-          <input type="password" value={config.apiKey} onChange={(e) => setConfig({ apiKey: e.target.value })} placeholder="Tempel API Key provider yang dipilih" />
+          <label className="field-label">API Key #1 (utama)</label>
+          <input type="password" value={config.apiKey} onChange={(e) => setConfig({ apiKey: e.target.value })} placeholder="Tempel API Key" />
           <label className="field-label">Base URL #1</label>
-          <input value={config.baseUrl} onChange={(e) => setConfig({ baseUrl: e.target.value })} placeholder="https://..." />
+          <input value={config.baseUrl} onChange={(e) => setConfig({ baseUrl: e.target.value })} />
           <label className="field-label">Model #1</label>
           <input value={config.model} onChange={(e) => setConfig({ model: e.target.value })} />
           <p className="help-text">{PROVIDERS[provider]?.help}</p>
-
           <label className="field-label">API Key #2 (fallback)</label>
-          <input type="password" value={config.apiKey2 || ''} onChange={(e) => setConfig({ apiKey2: e.target.value })} placeholder="Key cadangan" />
+          <input type="password" value={config.apiKey2 || ''} onChange={(e) => setConfig({ apiKey2: e.target.value })} />
           <input value={config.baseUrl2 || ''} onChange={(e) => setConfig({ baseUrl2: e.target.value })} placeholder="Base URL #2" />
           <input value={config.model2 || ''} onChange={(e) => setConfig({ model2: e.target.value })} placeholder="Model #2" />
-
-          <label className="field-label" style={{ marginTop: '0.75rem' }}>API Key tambahan</label>
-          <p className="help-text">Key #3+ jika #1/#2 gagal.</p>
+          <label className="field-label">API Key tambahan</label>
           {extras.map((ek, idx) => (
             <div key={ek.id} style={{ border: '1px solid #333', borderRadius: 8, padding: '0.5rem', marginBottom: '0.5rem' }}>
-              <div className="row-actions" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
-                <input value={ek.label} onChange={(e) => {
-                  const next = [...extras]; next[idx] = { ...ek, label: e.target.value }; setConfig({ extraKeys: next })
-                }} placeholder="Label" style={{ flex: 1 }} />
-                <button type="button" className="btn-ghost" onClick={() => setConfig({ extraKeys: extras.filter((x) => x.id !== ek.id) })}>✕</button>
-              </div>
+              <input value={ek.label} onChange={(e) => {
+                const next = [...extras]; next[idx] = { ...ek, label: e.target.value }; setConfig({ extraKeys: next })
+              }} placeholder="Label" />
               <input type="password" value={ek.apiKey} onChange={(e) => {
                 const next = [...extras]; next[idx] = { ...ek, apiKey: e.target.value }; setConfig({ extraKeys: next })
               }} placeholder="API Key" />
@@ -147,25 +135,38 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
               <input value={ek.model} onChange={(e) => {
                 const next = [...extras]; next[idx] = { ...ek, model: e.target.value }; setConfig({ extraKeys: next })
               }} placeholder="Model" />
+              <button type="button" className="btn-ghost" onClick={() => setConfig({ extraKeys: extras.filter((x) => x.id !== ek.id) })}>✕ Hapus</button>
             </div>
           ))}
           <button type="button" className="btn-ghost" onClick={() => setConfig({
-            extraKeys: [...extras, {
-              id: crypto.randomUUID(), label: `Key #${extras.length + 3}`,
-              apiKey: '', baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-20b',
-            }],
+            extraKeys: [...extras, { id: crypto.randomUUID(), label: `Key #${extras.length + 3}`, apiKey: '', baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-20b' }],
           })}>➕ Tambah API Key</button>
-
           <label className="field-label">Vercel Token</label>
-          <input type="password" value={config.vercelToken || ''} onChange={(e) => setConfig({ vercelToken: e.target.value })} placeholder="vercel_..." />
+          <input type="password" value={config.vercelToken || ''} onChange={(e) => setConfig({ vercelToken: e.target.value })} />
           <label className="row-actions">
             <input type="checkbox" checked={powerMode} onChange={(e) => setPowerMode(e.target.checked)} /> ⚡ Full Power
           </label>
         </section>
 
         <section className="side-block">
+          <h3>Backend (simpan pengaturan)</h3>
+          <p className="help-text">
+            Disimpan ke repo privat <code>vo-user-settings</code> di GitHub (settings.json).
+            Termasuk API key. Wajib login GitHub.
+          </p>
+          <button type="button" className="btn-ghost" disabled={isSyncingSettings || !github.token.trim()} onClick={async () => {
+            try { await saveToBackend({ includeGithubToken: true }) }
+            catch (e: unknown) { addMessage('System', String(e)) }
+          }}>{isSyncingSettings ? 'Menyimpan...' : '☁️ Simpan ke backend'}</button>
+          <button type="button" className="btn-ghost" disabled={isSyncingSettings || !github.token.trim()} onClick={async () => {
+            try { await loadFromBackend() }
+            catch (e: unknown) { addMessage('System', String(e)) }
+          }}>{isSyncingSettings ? 'Memuat...' : '⬇️ Muat dari backend'}</button>
+        </section>
+
+        <section className="side-block">
           <h3>Latih Agent</h3>
-          <p className="help-text">« ingat bahwa ... » · Memori: {agentMemory.prefs.length} pref, {agentMemory.lessons.length} pelajaran</p>
+          <p className="help-text">Memori: {agentMemory.prefs.length} pref, {agentMemory.lessons.length} pelajaran</p>
           <button className="btn-ghost" type="button" onClick={() => {
             const t = window.prompt('Pelajaran:')
             if (t?.trim()) { teachAgent(t.trim()); addMessage('System', '📚 ' + t.trim()) }
@@ -180,7 +181,6 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
             try { await connectWithToken() } catch (e: unknown) { addMessage('System', String(e)) }
           }}>{isLoadingRepos ? 'Memuat...' : 'Hubungkan / Refresh'}</button>
           {github.token.trim() && (<>
-            <input value={repoFilter} onChange={(e) => setRepoFilter(e.target.value)} placeholder="Filter repo..." />
             <select value={github.repoFullName} onChange={async (e) => {
               try { await selectRepo(e.target.value) } catch (err: unknown) { addMessage('System', String(err)) }
             }}>
@@ -234,13 +234,12 @@ function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) 
   return (
     <aside className={`sidebar sidebar-right ${open ? 'open' : 'collapsed'}`}>
       <div className="sidebar-header">
-        <button type="button" className="icon-btn" onClick={onClose} title="Sembunyikan">»</button>
+        <button type="button" className="icon-btn" onClick={onClose}>»</button>
         <h2>Chat & Tugas</h2>
       </div>
       <div className="chat-compose">
-        <textarea value={task} onChange={(e) => setTask(e.target.value)}
+        <textarea value={task} onChange={(e) => setTask(e.target.value)} rows={3}
           placeholder={github.repoFullName ? `Tugas untuk ${github.repoFullName}…` : 'Tugas…'}
-          rows={3}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleRun() }} />
         <button className="btn btn-primary" disabled={isRunning || !task.trim()} onClick={handleRun}>
           {isRunning ? 'Agent bekerja...' : powerMode ? '⚡ Jalankan' : 'Kirim'}
@@ -252,7 +251,6 @@ function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) 
       </div>
       {tab === 'log' && (
         <div className="log-box">
-          {messages.length === 0 && <p className="help-text" style={{ padding: '0.5rem' }}>Belum ada percakapan.</p>}
           {messages.map((m) => (
             <div key={m.id} className="log-line"><strong>{m.from}</strong><pre>{m.text}</pre></div>
           ))}
@@ -279,7 +277,7 @@ function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) 
           ))}
         </div>
       )}
-      {!config.apiKey && <p className="help-text" style={{ padding: '0.5rem 0.75rem' }}>Pilih setup API (⭐ Gemini) lalu isi API Key #1.</p>}
+      {!config.apiKey && <p className="help-text" style={{ padding: '0.5rem' }}>Pilih ⭐ Gemini lalu isi API Key #1. Simpan ke backend agar tidak hilang.</p>}
     </aside>
   )
 }
@@ -294,21 +292,17 @@ export default function App() {
   useEffect(() => { localStorage.setItem('vo_right_open', rightOpen ? '1' : '0') }, [rightOpen])
   return (
     <div className="app-shell">
-      {!leftOpen && (
-        <button type="button" className="rail-toggle rail-left" onClick={() => setLeftOpen(true)} title="Settings">⚙</button>
-      )}
+      {!leftOpen && <button type="button" className="rail-toggle rail-left" onClick={() => setLeftOpen(true)}>⚙</button>}
       <SettingsSidebar open={leftOpen} onClose={() => setLeftOpen(false)} />
       <main className="main-stage">
         <div className="office-header">
           <h1>Virtual Office AI</h1>
-          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings → pilih ⭐ Gemini / ⚡ Groq'}</p>
+          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings → API + Backend'}</p>
         </div>
         <OfficeFloor />
       </main>
       <ChatSidebar open={rightOpen} onClose={() => setRightOpen(false)} />
-      {!rightOpen && (
-        <button type="button" className="rail-toggle rail-right" onClick={() => setRightOpen(true)} title="Chat">💬</button>
-      )}
+      {!rightOpen && <button type="button" className="rail-toggle rail-right" onClick={() => setRightOpen(true)}>💬</button>}
     </div>
   )
 }
