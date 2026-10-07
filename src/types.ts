@@ -30,6 +30,14 @@ export interface Artifact {
   action?: 'upsert' | 'delete'
 }
 
+export interface ExtraApiKey {
+  id: string
+  label: string
+  apiKey: string
+  baseUrl: string
+  model: string
+}
+
 export interface AppConfig {
   apiKey: string
   baseUrl: string
@@ -38,6 +46,8 @@ export interface AppConfig {
   baseUrl2: string
   model2: string
   vercelToken: string
+  /** API key tambahan (3, 4, ...) */
+  extraKeys: ExtraApiKey[]
 }
 
 export interface GitHubSettings {
