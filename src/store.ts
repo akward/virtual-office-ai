@@ -36,6 +36,14 @@ function loadGH(): GitHubSettings {
   }
 }
 
+function loadExtraKeys() {
+  if (typeof localStorage === 'undefined') return []
+  try {
+    const raw = localStorage.getItem('vo_extra_keys')
+    return raw ? JSON.parse(raw) : []
+  } catch { return [] }
+}
+
 function openConnectPopup(url: string): Window | null {
   const w = 600, h = 720
   const left = Math.max(0, (window.screen.width - w) / 2)
@@ -110,6 +118,7 @@ export const useStore = create<Store>((set, get) => ({
     baseUrl2: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_base_url2') || 'https://openrouter.ai/api/v1' : 'https://openrouter.ai/api/v1',
     model2: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_model2') || 'google/gemini-2.0-flash-exp:free' : 'google/gemini-2.0-flash-exp:free',
     vercelToken: typeof localStorage !== 'undefined' ? localStorage.getItem('vo_vercel_token') || '' : '',
+    extraKeys: loadExtraKeys(),
   },
   github: loadGH(),
 
@@ -123,6 +132,7 @@ export const useStore = create<Store>((set, get) => ({
       if (c.baseUrl2 !== undefined) localStorage.setItem('vo_base_url2', c.baseUrl2)
       if (c.model2 !== undefined) localStorage.setItem('vo_model2', c.model2)
       if (c.vercelToken !== undefined) localStorage.setItem('vo_vercel_token', c.vercelToken)
+      if (c.extraKeys !== undefined) localStorage.setItem('vo_extra_keys', JSON.stringify(c.extraKeys))
     }
     return { config: next }
   }),
