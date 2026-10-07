@@ -239,8 +239,7 @@ export const useStore = create<Store>((set, get) => ({
     const teach = detectTeachIntent(userTask)
     if (teach) {
       get().teachAgent(teach)
-      addMessage('Budi (Manager)', `Sudah saya ingat:\n« ${teach} »\nDipakai di tugas berikutnya.`)
-      addMessage('System', `📚 Memori: ${get().agentMemory.prefs.length} preferensi, ${get().agentMemory.lessons.length} pelajaran.`)
+      addMessage('Budi (Manager)', `Sudah saya ingat:\n« ${teach} »`)
       set({ isRunning: false })
       return
     }
@@ -295,11 +294,11 @@ export const useStore = create<Store>((set, get) => ({
           set({ isRunning: false })
           return
         }
-        addMessage('Budi (Manager)', `Menghapus ${junk.length} file sampah:\n${junk.slice(0, 40).join(', ')}`)
+        addMessage('Budi (Manager)', `Menghapus ${junk.length} file sampah.`)
         const result = await deleteManyFiles(cfgNow, junk, 'Hapus file sampah')
-        if (result.deleted.length) addMessage('System', `✅ Terhapus (${result.deleted.length}): ${result.deleted.slice(0, 30).join(', ')}`)
-        if (result.errors.length) addMessage('System', `Gagal: ${result.errors.slice(0, 8).join('; ')}`)
-        addMessage('Budi (Manager)', 'Selesai. File penting tidak disentuh.')
+        if (result.deleted.length) addMessage('System', `✅ Terhapus (${result.deleted.length})`)
+        if (result.errors.length) addMessage('System', `Gagal: ${result.errors.slice(0, 5).join('; ')}`)
+        addMessage('Budi (Manager)', 'Selesai.')
       } catch (e: unknown) {
         addMessage('System', 'Gagal: ' + (e instanceof Error ? e.message : String(e)))
       } finally { set({ isRunning: false }) }
@@ -330,7 +329,6 @@ export const useStore = create<Store>((set, get) => ({
         }
         addMessage('System', `🚀 Deploy ${files.length} file...`)
         const dep = await deployToVercel({ token: get().config.vercelToken, name: github.repo || 'vo-app', files })
-        addMessage('Budi (Manager)', `Online: ${dep.url}`)
         addMessage('System', `✅ ${dep.url}`)
       } catch (e: unknown) {
         addMessage('System', 'Vercel: ' + (e instanceof Error ? e.message : String(e)))
@@ -365,38 +363,34 @@ export const useStore = create<Store>((set, get) => ({
       const mem = memoryBlock(get().agentMemory)
 
       updateAgent('manager', { status: 'thinking', currentTask: 'Berpikir...' })
-      addMessage('System', '🧠 Agent berpikir dulu sebelum bertindak...')
+      addMessage('System', '🧠 Berpikir dulu...')
 
-      const thinkSystem = `Kamu Budi, PM. Bahasa Indonesia. Wajib ikuti MEMORI AGENT.\nFormat:\n## Pemahaman\n## Jenis tugas\n(buat_app | edit_file | hapus | deploy | riset | lain)\n## Risiko\n## Rencana langkah\n## File yang akan disentuh\n## Keputusan\n(LANJUT atau KONFIRMASI)\n${mem}`
+      const thinkSystem = `Kamu Budi, PM. Bahasa Indonesia. Wajib ikuti MEMORI.\nFormat singkat:\n## Pemahaman\n## Jenis tugas\n## Keputusan (LANJUT)\n${mem}`
 
       let thought = ''
       try {
-        const th = await callLLMMulti(config, thinkSystem, `Tugas user:\n${userTask}${richContext}`, 900)
+        const th = await callLLMMulti(config, thinkSystem, `Tugas:\n${userTask}${richContext}`, 600)
         thought = th.text
       } catch {
-        try { thought = await callLLM(config, thinkSystem, userTask + richContext, 700) }
-        catch { thought = '## Pemahaman\n' + userTask.slice(0, 200) + '\n## Keputusan\nLANJUT' }
+        try { thought = await callLLM(config, thinkSystem, userTask + richContext, 500) }
+        catch { thought = '## Pemahaman\n' + userTask.slice(0, 120) + '\n## Keputusan\nLANJUT' }
       }
-      addMessage('Budi (Manager)', '🧠 Berpikir:\n' + thought.slice(0, 1200))
-      await paceBetweenAgents(Math.min(pace, 6000))
-
-      if (/##\s*Keputusan\s*\n\s*KONFIRMASI/i.test(thought)) {
-        addMessage('System', '⚠️ Tugas berisiko/ambigu menurut agent. Tetap dilanjutkan. Ajari dengan: ingat bahwa ...')
-      }
+      addMessage('Budi (Manager)', '🧠 ' + thought.replace(/```[\s\S]*?```/g, '').replace(/\s+/g, ' ').trim().slice(0, 320))
+      await paceBetweenAgents(Math.min(pace, 5000))
 
       updateAgent('manager', { status: 'thinking', currentTask: 'Rencana...' })
-      const planSystem = `Kamu Budi. SINGKAT max 8 baris.\n## Rencana\n## File\n${mem}`
+      const planSystem = `Kamu Budi. Max 5 baris. ## Rencana ## File\n${mem}`
       let plan: string
       try {
-        const one = await callLLMMulti(config, planSystem, `Tugas: ${userTask}\nPemikiran:\n${thought.slice(0, 1500)}${richContext}`, 700)
+        const one = await callLLMMulti(config, planSystem, `Tugas: ${userTask}\n${thought.slice(0, 800)}${richContext}`, 500)
         plan = one.text
-      } catch { plan = await callLLM(config, planSystem, userTask + richContext, 600) }
-      addMessage('Budi (Manager)', plan.slice(0, 800))
+      } catch { plan = await callLLM(config, planSystem, userTask + richContext, 400) }
+      addMessage('Budi (Manager)', plan.replace(/```[\s\S]*?```/g, '').replace(/\s+/g, ' ').trim().slice(0, 280))
       await paceBetweenAgents(pace)
 
       const workers = [
-        { id: 'coder', name: 'Andi', system: 'Kamu Andi. HANYA output fence file html/css/js.' },
-        { id: 'writer', name: 'Rina', system: 'Kamu Rina. HANYA output README.md singkat.' },
+        { id: 'coder', name: 'Andi', system: 'Kamu Andi. Output HANYA code fence file (```html:index.html). JANGAN penjelasan panjang.' },
+        { id: 'writer', name: 'Rina', system: 'Kamu Rina. Output HANYA ```md:README.md singkat.' },
       ]
 
       for (let wi = 0; wi < workers.length; wi++) {
@@ -407,12 +401,20 @@ export const useStore = create<Store>((set, get) => ({
           const out = await callLLMMulti(
             config,
             w.system + mem,
-            `Tugas: ${userTask.slice(0, 1200)}\nPemikiran: ${thought.slice(0, 800)}\nRencana: ${plan.slice(0, 1500)}${richContext}`,
+            `Tugas: ${userTask.slice(0, 1200)}\nPemikiran: ${thought.slice(0, 600)}\nRencana: ${plan.slice(0, 1000)}${richContext}`,
             tok
           )
+          const before = get().artifacts.length
           collectFrom(w.id, out.text)
-          addMessage(w.name, out.text.slice(0, 2000))
-          updateAgent(w.id, { status: 'done', currentTask: 'Selesai' })
+          const made = get().artifacts.slice(before)
+          const names = made.map((a) => a.filename).filter(Boolean)
+          if (names.length) {
+            addMessage(w.name, `✅ Siap: ${names.join(', ')}`)
+          } else {
+            const brief = out.text.replace(/```[\s\S]*?```/g, '').replace(/\s+/g, ' ').trim().slice(0, 120)
+            addMessage(w.name, brief ? `Catatan: ${brief}` : 'Selesai.')
+          }
+          updateAgent(w.id, { status: 'done', currentTask: 'Selesai', lastMessage: names[0] || 'ok' })
         } catch (e: unknown) {
           addMessage(w.name, 'Error: ' + (e instanceof Error ? e.message : String(e)))
         }
