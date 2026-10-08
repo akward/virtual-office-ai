@@ -43,8 +43,13 @@ function applyPayload(get: () => any, set: (p: any) => void, data: BackendSettin
   if (data.config) setConfig({ ...data.config, extraKeys: data.config.extraKeys || [] })
   if (data.powerMode !== undefined) setPowerMode(!!data.powerMode)
   if (data.agentMemory) {
-    saveMemory(data.agentMemory)
-    set({ agentMemory: data.agentMemory })
+    const mem = {
+      lessons: data.agentMemory.lessons || [],
+      prefs: data.agentMemory.prefs || [],
+      skills: data.agentMemory.skills || [],
+    }
+    saveMemory(mem)
+    set({ agentMemory: mem })
   }
   if (data.connectors) setConnectors(data.connectors)
   if (data.github) {
@@ -107,7 +112,7 @@ export async function loadFromBackendImpl({ get, set }: GetSet) {
     if (isSupabaseConfigured(sb)) {
       const raw = await loadVoSettings(sb, username)
       if (!raw) {
-        addMessage('System', 'Supabase: belum ada data. Klik Simpan ke database dulu.')
+        addMessage('System', 'Supabase: belum ada data. Klik Simpan ke backend dulu.')
         return
       }
       applyPayload(get, set, raw as BackendSettings, username)
