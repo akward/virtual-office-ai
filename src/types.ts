@@ -78,7 +78,23 @@ export interface AgentLesson {
   createdAt: number
 }
 
+/** Skill reusable ala oh-my-claudecode — auto-inject saat trigger cocok */
+export interface AgentSkill {
+  id: string
+  name: string
+  description: string
+  /** Kata kunci / frasa yang memicu skill */
+  triggers: string[]
+  /** Isi skill (aturan / pola yang wajib diikuti) */
+  body: string
+  /** manual | extracted | seeded */
+  source: 'manual' | 'extracted' | 'seeded'
+  createdAt: number
+  hits?: number
+}
+
 export interface AgentMemory {
   lessons: AgentLesson[]
   prefs: string[]
+  skills: AgentSkill[]
 }
