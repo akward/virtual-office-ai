@@ -2,10 +2,10 @@ import { create } from 'zustand'
 import type { Agent, AppConfig, Artifact, GitHubSettings, Message, RepoInfo, AgentMemory } from './types'
 import { callLLM, callLLMMulti, extractArtifacts, paceBetweenAgents, sanitizeAgentChat } from './llm'
 import { getAuthenticatedUser, listAllRepos, loadProjectContext, pushMany, createRepo, listRepoFiles, deleteManyFiles, emptyRepoBranch, getFile, type GitHubConfig } from './github'
-import { defaultConnectors, saveConnectors, startGmailOAuth, handleGmailOAuthCallback, executeConnectorActions, type ConnectorConfig } from './connectors'
+import { defaultConnectors, saveConnectors, startGmailOAuth, handleGmailOAuthCallback, type ConnectorConfig } from './connectors'
 import { defaultAgents, pickWorkers, isChatOnlyTask } from './agents'
 import { deployToVercel } from './vercel'
-import { loadMemory, saveMemory, teach, memoryBlock, parseSkillFromLLM, type AgentMemory as Mem } from './agentMemory'
+import { loadMemory, saveMemory, memoryBlock, parseSkillFromLLM, detectTeachIntent } from './agentMemory'
 import { saveToBackendImpl, loadFromBackendImpl, bootstrapCloudSync, logTaskToSupabase } from './storeBackend'
 
 export type StoreState = any
@@ -35,7 +35,15 @@ export const useStore = create<any>((set, get) => ({
   setPowerMode: (v: boolean) => set({ powerMode: v }),
   clearArtifacts: () => set({ artifacts: [] }),
   clearMemory: () => { const empty = { lessons: [], prefs: [], skills: [] }; saveMemory(empty); set({ agentMemory: empty }) },
-  teachAgent: (lesson: string) => { const mem = teach(get().agentMemory, lesson); set({ agentMemory: mem }) },
+  teachAgent: (lesson: string) => {
+    const mem = get().agentMemory
+    const next = {
+      ...mem,
+      lessons: [...(mem.lessons || []).filter((x: string) => x !== lesson), lesson].slice(-40),
+    }
+    saveMemory(next)
+    set({ agentMemory: next })
+  },
   upsertSkill: (sk: any) => {
     const mem = get().agentMemory
     const skills = [...(mem.skills || []).filter((s: any) => s.id !== sk.id), sk]
