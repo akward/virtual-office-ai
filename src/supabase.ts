@@ -25,7 +25,7 @@ const SB_ACTIVE_KEY = 'vo_sb_active'
 const VB_PROFILES_KEY = 'vo_vercel_profiles'
 const VB_ACTIVE_KEY = 'vo_vercel_active'
 
-/** Contoh profil (opsional) — tidak dipaksa sebagai default aktif */
+/** Project Virtual Office yang sudah dipakai (cloud settings) */
 export const EXAMPLE_SB_PROFILES: SupabaseProfile[] = [
   {
     id: 'vo-ai',
@@ -38,17 +38,6 @@ export const EXAMPLE_SB_PROFILES: SupabaseProfile[] = [
 
 export const DEFAULT_SUPABASE_URL = ''
 export const DEFAULT_SUPABASE_ANON_KEY = ''
-
-export function loadSbProfiles(): SupabaseProfile[] {
-  if (typeof localStorage === 'undefined') return []
-  try {
-    const raw = localStorage.getItem(SB_PROFILES_KEY)
-    if (raw) return JSON.parse(raw) as SupabaseProfile[]
-  } catch {
-    /* */
-  }
-  return []
-}
 
 export function saveSbProfiles(list: SupabaseProfile[]) {
   if (typeof localStorage === 'undefined') return
@@ -66,20 +55,43 @@ export function setActiveSbId(id: string) {
   else localStorage.removeItem(SB_ACTIVE_KEY)
 }
 
+export function loadSbProfiles(): SupabaseProfile[] {
+  if (typeof localStorage === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(SB_PROFILES_KEY)
+    if (raw) {
+      const list = JSON.parse(raw) as SupabaseProfile[]
+      if (Array.isArray(list) && list.length) return list
+    }
+  } catch {
+    /* */
+  }
+  // Seed profil VO agar device baru langsung bisa load cloud
+  if (EXAMPLE_SB_PROFILES.length) {
+    saveSbProfiles(EXAMPLE_SB_PROFILES)
+    if (!getActiveSbId()) setActiveSbId(EXAMPLE_SB_PROFILES[0].id)
+    return EXAMPLE_SB_PROFILES
+  }
+  return []
+}
+
 export function loadSupabaseConfig(): SupabaseConfig {
   if (typeof localStorage === 'undefined') {
     return { url: '', anonKey: '' }
   }
-  const activeId = getActiveSbId()
   const profiles = loadSbProfiles()
-  const active = profiles.find((p) => p.id === activeId)
-  if (active) {
+  const activeId = getActiveSbId()
+  const active = profiles.find((p) => p.id === activeId) || profiles[0]
+  if (active?.url && active?.anonKey) {
+    if (!activeId && active.id) setActiveSbId(active.id)
     return { url: active.url.replace(/\/$/, ''), anonKey: active.anonKey }
   }
-  return {
-    url: (localStorage.getItem('vo_sb_url') || '').replace(/\/$/, ''),
-    anonKey: localStorage.getItem('vo_sb_key') || '',
-  }
+  const url = (localStorage.getItem('vo_sb_url') || '').replace(/\/$/, '')
+  const anonKey = localStorage.getItem('vo_sb_key') || ''
+  if (url && anonKey) return { url, anonKey }
+  const ex = EXAMPLE_SB_PROFILES[0]
+  if (ex) return { url: ex.url.replace(/\/$/, ''), anonKey: ex.anonKey }
+  return { url: '', anonKey: '' }
 }
 
 export function saveSupabaseConfig(c: Partial<SupabaseConfig>) {
