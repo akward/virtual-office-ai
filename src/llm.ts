@@ -108,6 +108,27 @@ export type ExtractedArtifact = {
   action: 'upsert' | 'delete'
 }
 
+function isSaneFilename(name: string): boolean {
+  const n = name.replace(/^\/+/, '').trim()
+  if (!n || n.length > 120) return false
+  if (/\s{2,}/.test(n)) return false
+  if (/JANGAN|penjelasan|Max \d|Kamu |Here's a thinking|thinking process|```/i.test(n)) return false
+  if (!/^[a-zA-Z0-9_./@+-]+$/.test(n)) return false
+  if (!/\.[a-zA-Z0-9]{1,12}$/.test(n) && !n.includes('/')) return false
+  return true
+}
+
+export function sanitizeAgentChat(text: string): string {
+  let t = text || ''
+  t = t.replace(/```[\s\S]*?```/g, ' ')
+  t = t.replace(/Here's a thinking process:[\s\S]*/gi, ' ')
+  t = t.replace(/\*\*Analyze User Input:\*\*[\s\S]*/gi, ' ')
+  t = t.replace(/Kamu Budi\. Max 5 baris\.[\s\S]*/gi, ' ')
+  t = t.replace(/JANGAN penjelasan panjang[^\n]*/gi, ' ')
+  t = t.replace(/\s+/g, ' ').trim()
+  return t
+}
+
 export function extractArtifacts(text: string, agentId: string): { cleanText: string; artifacts: ExtractedArtifact[] } {
   const artifacts: ExtractedArtifact[] = []
   const used = new Set<string>()
@@ -115,6 +136,10 @@ export function extractArtifacts(text: string, agentId: string): { cleanText: st
   const pushArt = (filename: string, language: string, content: string, action: 'upsert' | 'delete') => {
     let finalName = filename.replace(/^\/+/, '').trim()
     if (!finalName) return
+    if (!isSaneFilename(finalName)) return
+    if (action === 'upsert' && /JANGAN penjelasan|Max 5 baris|Here's a thinking process|Kamu Budi/i.test(content.slice(0, 400))) {
+      return
+    }
     if (action === 'upsert') {
       let n = 2
       let candidate = finalName
@@ -142,7 +167,7 @@ export function extractArtifacts(text: string, agentId: string): { cleanText: st
     let content = match[3].trim()
     if (lang === 'delete' || lang === 'hapus' || lang === 'rm') {
       const path = filename || content.split('\n')[0].trim()
-      if (path) pushArt(path, 'delete', '', 'delete')
+      if (path && isSaneFilename(path)) pushArt(path, 'delete', '', 'delete')
       continue
     }
     if (!content && !filename) continue
@@ -153,7 +178,9 @@ export function extractArtifacts(text: string, agentId: string): { cleanText: st
   }
   const lineRe = /^\s*(?:DELETE|HAPUS|REMOVE|RM)\s*[:\-]\s*[`'\"]?([^\s`'\"]+)[`'\"]?\s*$/gim
   let lm
-  while ((lm = lineRe.exec(text)) !== null) pushArt(lm[1], 'delete', '', 'delete')
+  while ((lm = lineRe.exec(text)) !== null) {
+    if (isSaneFilename(lm[1])) pushArt(lm[1], 'delete', '', 'delete')
+  }
   return { cleanText: text, artifacts }
 }
 
@@ -184,7 +211,6 @@ export const PROVIDERS = {
   },
 } as const
 
-/** Setup cepat: set API utama (+ opsional #2) dalam satu klik */
 export const SETUP_PRESETS = {
   gemini: {
     name: 'Google AI Studio (disarankan gratis)',
