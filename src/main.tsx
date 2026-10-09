@@ -4,8 +4,11 @@ import App from './App.tsx'
 import './index.css'
 import { useStore } from './store'
 import { startCloudSync } from './cloudBoot'
+import { applyFullRoster } from './rosterBoot'
 
-// Sync API key & setting dari Supabase di setiap device
+// 19 agent di lantai kantor
+applyFullRoster(useStore)
+// Sync API key antar device
 startCloudSync(useStore)
 
 createRoot(document.getElementById('root')!).render(
