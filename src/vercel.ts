@@ -45,7 +45,6 @@ function errMsg(data: any, fallback: string): string {
   )
 }
 
-/** Cari project by name, atau buat baru */
 async function ensureProject(
   token: string,
   name: string
@@ -201,4 +200,34 @@ export async function deployToVercel(opts: {
     : `https://${project.name}.vercel.app`
 
   return { url, id: res.data.id || '' }
+}
+
+/** Cek token Vercel: user login + team */
+export async function probeVercelAccount(token: string): Promise<string> {
+  if (!token?.trim()) return 'Vercel: token belum diisi di Settings.'
+  try {
+    const res = await fetch('https://api.vercel.com/v2/user', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      return `Vercel: token tidak valid / gagal login (${res.status}). ${data?.error?.message || data?.message || ''}`.trim()
+    }
+    const u = data.user || data
+    const name = u.name || u.username || u.email || 'user'
+    const email = u.email ? ` (${u.email})` : ''
+    let teamsLine = ''
+    try {
+      const tr = await fetch('https://api.vercel.com/v2/teams?limit=20', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const td = await tr.json().catch(() => ({}))
+      if (tr.ok && Array.isArray(td.teams) && td.teams.length) {
+        teamsLine = '\nTeam: ' + td.teams.map((t: any) => t.slug || t.name).join(', ')
+      }
+    } catch { /* optional */ }
+    return `Vercel: login OK sebagai ${name}${email}.${teamsLine}`
+  } catch (e: unknown) {
+    return 'Vercel: gagal menghubungi API — ' + (e instanceof Error ? e.message : String(e))
+  }
 }
