@@ -11,6 +11,24 @@ import {
 
 type GetSet = { get: () => any; set: (p: any) => void }
 
+const CLOUD_USER_KEY = 'vo_cloud_user'
+/** User key bersama agar device manapun memuat setting yang sama */
+export const SHARED_CLOUD_KEYS = ['akward', 'default'] as const
+
+export function getCloudUserKey(githubUsername?: string): string {
+  if (typeof localStorage !== 'undefined') {
+    const saved = localStorage.getItem(CLOUD_USER_KEY)
+    if (saved?.trim()) return saved.trim()
+  }
+  if (githubUsername?.trim()) return githubUsername.trim()
+  return 'akward'
+}
+
+export function setCloudUserKey(key: string) {
+  if (typeof localStorage === 'undefined') return
+  localStorage.setItem(CLOUD_USER_KEY, key.trim() || 'akward')
+}
+
 function buildPayload(get: () => any, username: string, opts?: { includeGithubToken?: boolean }): BackendSettings {
   const { github, config, powerMode, agentMemory, connectors } = get()
   return {
@@ -38,7 +56,7 @@ function buildPayload(get: () => any, username: string, opts?: { includeGithubTo
   }
 }
 
-function applyPayload(get: () => any, set: (p: any) => void, data: BackendSettings, username: string) {
+function applyPayload(get: () => any, set: (p: any) => void, data: BackendSettings, username: string, silent?: boolean) {
   const { setConfig, setGithub, setPowerMode, setConnectors, addMessage } = get()
   if (data.config) setConfig({ ...data.config, extraKeys: data.config.extraKeys || [] })
   if (data.powerMode !== undefined) setPowerMode(!!data.powerMode)
@@ -63,81 +81,134 @@ function applyPayload(get: () => any, set: (p: any) => void, data: BackendSettin
       ...(data.github.token ? { token: data.github.token } : {}),
     })
   }
-  addMessage('System', `☁️ Pengaturan dimuat (${data.savedAt || 'ok'}).`)
+  setCloudUserKey(username)
+  if (!silent) {
+    const hasKey = Boolean(data.config?.apiKey || data.config?.apiKey2)
+    addMessage('System', hasKey ? `☁️ Setting cloud dimuat (${username}). API siap.` : `☁️ Setting cloud dimuat (${username}).`)
+  }
+}
+
+async function loadFromSupabaseAny(sb: ReturnType<typeof loadSupabaseConfig>, preferred: string): Promise<{ raw: unknown; key: string } | null> {
+  const keys = Array.from(new Set([preferred, ...SHARED_CLOUD_KEYS]))
+  for (const key of keys) {
+    try {
+      const raw = await loadVoSettings(sb, key)
+      if (raw && typeof raw === 'object') return { raw, key }
+    } catch {
+      /* next */
+    }
+  }
+  return null
 }
 
 export async function saveToBackendImpl(
   { get, set }: GetSet,
-  opts?: { includeGithubToken?: boolean }
+  opts?: { includeGithubToken?: boolean; silent?: boolean }
 ) {
   const { github, addMessage } = get()
   set({ isSyncingSettings: true })
   try {
-    let username = github.username
-    if (!username && github.token.trim()) {
-      username = await getAuthenticatedUser(github.token)
+    let username = getCloudUserKey(github.username)
+    if (github.token?.trim() && !github.username) {
+      try {
+        username = await getAuthenticatedUser(github.token)
+        setCloudUserKey(username)
+      } catch {
+        /* keep */
+      }
     }
-    if (!username) username = 'default'
 
     const payload = buildPayload(get, username, opts)
     const sb = loadSupabaseConfig()
 
     if (isSupabaseConfigured(sb)) {
       await upsertVoSettings(sb, username, payload)
-      addMessage('System', `☁️ Disimpan ke Supabase (user: ${username}).`)
+      if (username !== 'default') {
+        try {
+          await upsertVoSettings(sb, 'default', payload)
+        } catch {
+          /* mirror optional */
+        }
+      }
+      if (!opts?.silent) addMessage('System', `☁️ Disimpan ke cloud (user: ${username}).`)
       return
     }
 
-    if (!github.token.trim()) {
-      throw new Error('Isi Supabase URL+Key, atau hubungkan GitHub untuk backend alternatif.')
+    if (!github.token?.trim()) {
+      throw new Error('Supabase belum siap. Refresh halaman atau isi URL+Key di Settings.')
     }
     const { url } = await saveSettingsToBackend(github.token, username, payload)
-    addMessage('System', `☁️ Disimpan ke GitHub backend. ${url}`)
+    if (!opts?.silent) addMessage('System', `☁️ Disimpan ke GitHub backend. ${url}`)
   } finally {
     set({ isSyncingSettings: false })
   }
 }
 
-export async function loadFromBackendImpl({ get, set }: GetSet) {
+export async function loadFromBackendImpl({ get, set }: GetSet, opts?: { silent?: boolean }) {
   const { github, addMessage } = get()
   set({ isSyncingSettings: true })
   try {
-    let username = github.username
-    if (!username && github.token.trim()) {
-      username = await getAuthenticatedUser(github.token)
+    let username = getCloudUserKey(github.username)
+    if (github.token?.trim() && !github.username) {
+      try {
+        username = await getAuthenticatedUser(github.token)
+      } catch {
+        /* */
+      }
     }
-    if (!username) username = 'default'
 
     const sb = loadSupabaseConfig()
     if (isSupabaseConfigured(sb)) {
-      const raw = await loadVoSettings(sb, username)
-      if (!raw) {
-        addMessage('System', 'Supabase: belum ada data. Klik Simpan ke backend dulu.')
+      const found = await loadFromSupabaseAny(sb, username)
+      if (!found) {
+        if (!opts?.silent) addMessage('System', 'Cloud: belum ada setting. Isi API lalu akan tersimpan otomatis.')
         return
       }
-      applyPayload(get, set, raw as BackendSettings, username)
+      applyPayload(get, set, found.raw as BackendSettings, found.key, opts?.silent)
       return
     }
 
-    if (!github.token.trim()) {
-      throw new Error('Isi Supabase URL+Key, atau hubungkan GitHub.')
+    if (!github.token?.trim()) {
+      if (!opts?.silent) addMessage('System', 'Isi Supabase atau GitHub token untuk sync antar device.')
+      return
     }
     const data = await loadSettingsFromBackend(github.token, username)
     if (!data) {
-      addMessage('System', 'Belum ada pengaturan di backend.')
+      if (!opts?.silent) addMessage('System', 'Belum ada pengaturan di backend.')
       return
     }
-    applyPayload(get, set, data, username)
+    applyPayload(get, set, data, username, opts?.silent)
   } finally {
     set({ isSyncingSettings: false })
   }
+}
+
+/** Dipanggil sekali saat app buka — sync cloud tanpa perlu klik manual */
+export async function bootstrapCloudSync({ get, set }: GetSet) {
+  try {
+    await loadFromBackendImpl({ get, set }, { silent: false })
+  } catch (e: unknown) {
+    console.warn('bootstrapCloudSync', e)
+  }
+}
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Debounce simpan ke cloud setelah ubah API key / setting */
+export function scheduleCloudSave(getSet: GetSet) {
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => {
+    saveToBackendImpl(getSet, { includeGithubToken: true, silent: true }).catch((e) => {
+      console.warn('auto-save cloud', e)
+    })
+  }, 1200)
 }
 
 export async function logTaskToSupabase(userKey: string, task: string, repo?: string, summary?: string) {
   const sb = loadSupabaseConfig()
   if (!isSupabaseConfigured(sb)) return
   await insertVoTask(sb, {
-    user_key: userKey || 'default',
+    user_key: userKey || getCloudUserKey() || 'default',
     repo,
     task,
     result_summary: summary,
