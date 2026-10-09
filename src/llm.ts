@@ -38,7 +38,16 @@ export async function callLLM(
     })
     if (res.ok) {
       const data = await res.json()
-      return data.choices?.[0]?.message?.content?.trim() || 'Tidak ada respons.'
+      const content = data.choices?.[0]?.message?.content?.trim() || ''
+      if (!content) {
+        lastErr = 'Model mengembalikan konten kosong'
+        if (attempt < maxAttempts - 1) {
+          await sleep(800 * (attempt + 1))
+          continue
+        }
+        throw new Error('Model tidak mengembalikan teks. Coba model/API key lain.')
+      }
+      return content
     }
     const err = await res.text()
     lastErr = err.slice(0, 250)
@@ -287,6 +296,10 @@ export async function callLLMMulti(
   for (const item of chain) {
     try {
       const text = await callLLM(item.cfg, systemPrompt, userMessage, maxTokens)
+      if (!text || /^tidak ada respons\.?$/i.test(text.trim())) {
+        lastErr = new Error('Respons kosong dari ' + item.label)
+        continue
+      }
       return { text, used: item.label }
     } catch (e: unknown) {
       lastErr = e
