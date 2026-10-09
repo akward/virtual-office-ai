@@ -5,18 +5,80 @@ export type SupabaseConfig = {
   anonKey: string
 }
 
-/** Default project: virtual-office-ai (baru, bukan realisasi-anggaran) */
-export const DEFAULT_SUPABASE_URL = 'https://pwqpummgalevnamjrvnb.supabase.co'
-export const DEFAULT_SUPABASE_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3cXB1bW1nYWxldm5hbWpydm5iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzODQ5ODEsImV4cCI6MjEwNjk2MDk4MX0.kofVsZ9JYUwGgYFUMmxTxRnNhevnLfG_PLBt_Rta1Vk'
+export type SupabaseProfile = {
+  id: string
+  label: string
+  url: string
+  anonKey: string
+}
+
+export type VercelProfile = {
+  id: string
+  label: string
+  token: string
+  projectName?: string
+  teamId?: string
+}
+
+const SB_PROFILES_KEY = 'vo_sb_profiles'
+const SB_ACTIVE_KEY = 'vo_sb_active'
+const VB_PROFILES_KEY = 'vo_vercel_profiles'
+const VB_ACTIVE_KEY = 'vo_vercel_active'
+
+/** Contoh profil (opsional) — tidak dipaksa sebagai default aktif */
+export const EXAMPLE_SB_PROFILES: SupabaseProfile[] = [
+  {
+    id: 'vo-ai',
+    label: 'virtual-office-ai',
+    url: 'https://pwqpummgalevnamjrvnb.supabase.co',
+    anonKey:
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3cXB1bW1nYWxldm5hbWpydm5iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzODQ5ODEsImV4cCI6MjEwNjk2MDk4MX0.kofVsZ9JYUwGgYFUMmxTxRnNhevnLfG_PLBt_Rta1Vk',
+  },
+]
+
+export const DEFAULT_SUPABASE_URL = ''
+export const DEFAULT_SUPABASE_ANON_KEY = ''
+
+export function loadSbProfiles(): SupabaseProfile[] {
+  if (typeof localStorage === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(SB_PROFILES_KEY)
+    if (raw) return JSON.parse(raw) as SupabaseProfile[]
+  } catch {
+    /* */
+  }
+  return []
+}
+
+export function saveSbProfiles(list: SupabaseProfile[]) {
+  if (typeof localStorage === 'undefined') return
+  localStorage.setItem(SB_PROFILES_KEY, JSON.stringify(list))
+}
+
+export function getActiveSbId(): string {
+  if (typeof localStorage === 'undefined') return ''
+  return localStorage.getItem(SB_ACTIVE_KEY) || ''
+}
+
+export function setActiveSbId(id: string) {
+  if (typeof localStorage === 'undefined') return
+  if (id) localStorage.setItem(SB_ACTIVE_KEY, id)
+  else localStorage.removeItem(SB_ACTIVE_KEY)
+}
 
 export function loadSupabaseConfig(): SupabaseConfig {
   if (typeof localStorage === 'undefined') {
-    return { url: DEFAULT_SUPABASE_URL, anonKey: DEFAULT_SUPABASE_ANON_KEY }
+    return { url: '', anonKey: '' }
+  }
+  const activeId = getActiveSbId()
+  const profiles = loadSbProfiles()
+  const active = profiles.find((p) => p.id === activeId)
+  if (active) {
+    return { url: active.url.replace(/\/$/, ''), anonKey: active.anonKey }
   }
   return {
-    url: (localStorage.getItem('vo_sb_url') || DEFAULT_SUPABASE_URL).replace(/\/$/, ''),
-    anonKey: localStorage.getItem('vo_sb_key') || DEFAULT_SUPABASE_ANON_KEY,
+    url: (localStorage.getItem('vo_sb_url') || '').replace(/\/$/, ''),
+    anonKey: localStorage.getItem('vo_sb_key') || '',
   }
 }
 
@@ -24,6 +86,88 @@ export function saveSupabaseConfig(c: Partial<SupabaseConfig>) {
   if (typeof localStorage === 'undefined') return
   if (c.url !== undefined) localStorage.setItem('vo_sb_url', c.url.replace(/\/$/, ''))
   if (c.anonKey !== undefined) localStorage.setItem('vo_sb_key', c.anonKey)
+}
+
+export function upsertSbProfile(profile: SupabaseProfile) {
+  const list = loadSbProfiles().filter((p) => p.id !== profile.id && p.label !== profile.label)
+  list.push(profile)
+  saveSbProfiles(list)
+  setActiveSbId(profile.id)
+  saveSupabaseConfig({ url: profile.url, anonKey: profile.anonKey })
+}
+
+export function removeSbProfile(id: string) {
+  const list = loadSbProfiles().filter((p) => p.id !== id)
+  saveSbProfiles(list)
+  if (getActiveSbId() === id) {
+    setActiveSbId(list[0]?.id || '')
+    if (list[0]) saveSupabaseConfig({ url: list[0].url, anonKey: list[0].anonKey })
+    else saveSupabaseConfig({ url: '', anonKey: '' })
+  }
+}
+
+export function selectSbProfile(id: string) {
+  const p = loadSbProfiles().find((x) => x.id === id)
+  if (!p) {
+    setActiveSbId('')
+    return
+  }
+  setActiveSbId(id)
+  saveSupabaseConfig({ url: p.url, anonKey: p.anonKey })
+}
+
+export function loadVercelProfiles(): VercelProfile[] {
+  if (typeof localStorage === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(VB_PROFILES_KEY)
+    if (raw) return JSON.parse(raw) as VercelProfile[]
+  } catch {
+    /* */
+  }
+  return []
+}
+
+export function saveVercelProfiles(list: VercelProfile[]) {
+  if (typeof localStorage === 'undefined') return
+  localStorage.setItem(VB_PROFILES_KEY, JSON.stringify(list))
+}
+
+export function getActiveVercelId(): string {
+  if (typeof localStorage === 'undefined') return ''
+  return localStorage.getItem(VB_ACTIVE_KEY) || ''
+}
+
+export function setActiveVercelId(id: string) {
+  if (typeof localStorage === 'undefined') return
+  if (id) localStorage.setItem(VB_ACTIVE_KEY, id)
+  else localStorage.removeItem(VB_ACTIVE_KEY)
+}
+
+export function getActiveVercelProfile(): VercelProfile | null {
+  const id = getActiveVercelId()
+  return loadVercelProfiles().find((p) => p.id === id) || null
+}
+
+export function upsertVercelProfile(profile: VercelProfile) {
+  const list = loadVercelProfiles().filter((p) => p.id !== profile.id && p.label !== profile.label)
+  list.push(profile)
+  saveVercelProfiles(list)
+  setActiveVercelId(profile.id)
+}
+
+export function removeVercelProfile(id: string) {
+  const list = loadVercelProfiles().filter((p) => p.id !== id)
+  saveVercelProfiles(list)
+  if (getActiveVercelId() === id) setActiveVercelId(list[0]?.id || '')
+}
+
+export function selectVercelProfile(id: string) {
+  if (!loadVercelProfiles().some((p) => p.id === id)) {
+    setActiveVercelId('')
+    return null
+  }
+  setActiveVercelId(id)
+  return getActiveVercelProfile()
 }
 
 export function isSupabaseConfigured(c?: SupabaseConfig): boolean {
@@ -79,37 +223,31 @@ export async function loadVoSettings(
   }
   const rows = await res.json()
   if (!Array.isArray(rows) || !rows.length) return null
-  return rows[0].payload ?? null
+  return rows[0].payload
 }
 
 export async function insertVoTask(
   cfg: SupabaseConfig,
-  row: { user_key: string; repo?: string; task: string; status?: string; result_summary?: string }
+  row: { user_key: string; repo?: string; task: string; result_summary?: string }
 ): Promise<void> {
-  const res = await sbFetch(cfg, 'vo_tasks', {
+  await sbFetch(cfg, 'vo_tasks', {
     method: 'POST',
     headers: { Prefer: 'return=minimal' },
-    body: JSON.stringify({
-      user_key: row.user_key,
-      repo: row.repo || null,
-      task: row.task,
-      status: row.status || 'done',
-      result_summary: row.result_summary || null,
-    }),
-  })
-  if (!res.ok) {
-    console.warn('vo_tasks insert', await res.text())
-  }
+    body: JSON.stringify({ ...row, created_at: new Date().toISOString() }),
+  }).catch(() => {})
 }
 
 export async function testSupabaseConnection(cfg: SupabaseConfig): Promise<string> {
-  const res = await sbFetch(cfg, 'vo_settings?select=user_key&limit=1', {
-    method: 'GET',
-    headers: { Prefer: 'count=exact' },
-  })
-  if (!res.ok) {
+  if (!cfg.url.trim() || !cfg.anonKey.trim()) return 'Isi URL dan Anon Key dulu.'
+  try {
+    const res = await sbFetch(cfg, 'vo_settings?select=user_key&limit=1', { method: 'GET' })
+    if (res.ok) return `OK — terhubung ke ${cfg.url.replace(/^https?:\/\//, '').slice(0, 40)}`
     const t = await res.text()
-    throw new Error(`Koneksi gagal ${res.status}: ${t.slice(0, 180)}`)
+    if (res.status === 404 || /relation|does not exist/i.test(t)) {
+      return `Terhubung, tapi tabel vo_settings belum ada di project ini (${res.status}).`
+    }
+    return `HTTP ${res.status}: ${t.slice(0, 120)}`
+  } catch (e: unknown) {
+    return 'Gagal: ' + (e instanceof Error ? e.message : String(e))
   }
-  return 'OK — project virtual-office-ai · tabel vo_settings siap'
 }
