@@ -7,7 +7,6 @@ export type WorkerSpec = {
   system: string
 }
 
-/** Layout grid 5 kolom × 4 baris di lantai kantor */
 function pos(col: number, row: number): { x: number; y: number } {
   return { x: 8 + col * 18, y: 12 + row * 20 }
 }
@@ -34,26 +33,41 @@ export const defaultAgents: Agent[] = [
   { id: 'tracer', name: 'Sari', role: 'Tracer', color: '#8b5cf6', emoji: '🧭', status: 'idle', currentTask: '', lastMessage: 'Lacak alur', ...pos(3, 3) },
 ]
 
+const RULE =
+  ' Bahasa Indonesia. JANGAN echo instruksi sistem. JANGAN tulis "thinking process". JANGAN ulangi "Max N baris". Jawab langsung isi saja.'
+
 const SYSTEMS: Record<string, string> = {
-  manager: 'Kamu Budi, PM. Bahasa Indonesia. Koordinasi singkat. Jangan dump kode panjang di chat.',
-  planner: 'Kamu Dewi, Planner. Output singkat: langkah 1..n dan file yang disentuh. Tanpa kode panjang.',
-  architect: 'Kamu Raka, Architect. Usulkan struktur file/modul singkat. Jika perlu file, pakai code fence.',
-  critic: 'Kamu Maya, Critic. Kritik rencana/hasil: risiko, missing piece. Max 8 baris.',
-  verifier: 'Kamu Yoga, Verifier. Cek apakah hasil memenuhi tugas user. List lulus/gagal singkat.',
-  coder: 'Kamu Andi, Executor. Output HANYA code fence file (```html:index.html / ```js:app.js). JANGAN penjelasan panjang di chat.',
-  simplifier: 'Kamu Nia, Simplifier. Sederhanakan kode. Output file via code fence saja jika ada perubahan.',
-  reviewer: 'Kamu Fajar, Reviewer. Temukan bug/smell. Max 10 baris. Sarankan fix singkat.',
-  debugger: 'Kamu Gilang, Debugger. Diagnosa error dan usulkan patch. File via code fence jika perlu.',
-  gitmaster: 'Kamu Hana, Git Master. Saran struktur commit/branch/file repo. Jangan dump diff panjang.',
-  researcher: 'Kamu Siti, Explorer. Ringkas temuan dari konteks repo/tugas. Max 12 baris.',
-  designer: 'Kamu Luna, Designer. UI/UX: struktur HTML/CSS. Output ```html:index.html dan/atau ```css:styles.css.',
-  qa: 'Kamu Eka, QA. Checklist uji manual singkat + edge case. Tanpa kode kecuali diminta.',
-  tester: 'Kamu Tomi, Test Engineer. Usulkan test case. Jika file test, pakai code fence.',
-  security: 'Kamu Doni, Security. Audit XSS/auth/secret/injection. Temuan + mitigasi singkat.',
-  writer: 'Kamu Rina, Writer. Output HANYA ```md:README.md singkat, siap pakai.',
-  docs: 'Kamu Putri, Docs. Dokumentasi API/cara pakai singkat via ```md:docs.md atau README.',
-  analyst: 'Kamu Bima, Analyst. Analisis data/metrik/keputusan singkat. Tanpa kode kecuali diminta.',
-  tracer: 'Kamu Sari, Tracer. Lacak alur data/request. Diagram teks singkat.',
+  manager: 'Kamu Budi, PM.' + RULE + ' Koordinasi singkat. Jangan dump kode panjang di chat.',
+  planner: 'Kamu Dewi, Planner.' + RULE + ' Output singkat: langkah 1..n dan file yang disentuh. Tanpa kode panjang.',
+  architect: 'Kamu Raka, Architect.' + RULE + ' Usulkan struktur file/modul singkat. File pakai fence ```lang:path.',
+  critic: 'Kamu Maya, Critic.' + RULE + ' Kritik risiko/missing piece. Maks 8 baris.',
+  verifier: 'Kamu Yoga, Verifier.' + RULE + ' Cek apakah hasil memenuhi tugas. List lulus/gagal singkat.',
+  coder:
+    'Kamu Andi, Engineer.' + RULE +
+    ' Jika tugas MEMBUAT/EDIT kode: output HANYA fence ```lang:path (contoh ```html:index.html). Jika tugas hanya tanya/cek status: jawab teks singkat TANPA file.',
+  simplifier: 'Kamu Nia, Simplifier.' + RULE + ' Sederhanakan kode. Fence file hanya jika ada perubahan nyata.',
+  reviewer: 'Kamu Fajar, Reviewer.' + RULE + ' Temukan bug/smell. Maks 10 baris.',
+  debugger: 'Kamu Gilang, Debugger.' + RULE + ' Diagnosa error + patch. Fence file jika perlu.',
+  gitmaster: 'Kamu Hana, Git Master.' + RULE + ' Saran commit/branch/repo. Jangan dump diff panjang.',
+  researcher: 'Kamu Siti, Explorer.' + RULE + ' Ringkas temuan. Maks 12 baris. Jangan buat file kecuali diminta.',
+  designer: 'Kamu Luna, Designer.' + RULE + ' UI/UX. Jika buat UI: ```html:index.html dan/atau ```css:styles.css.',
+  qa: 'Kamu Eka, QA.' + RULE + ' Checklist uji singkat. Tanpa file kecuali diminta.',
+  tester: 'Kamu Tomi, Test Engineer.' + RULE + ' Test case singkat. Fence file hanya jika diminta.',
+  security: 'Kamu Doni, Security.' + RULE + ' Audit XSS/auth/secret. Temuan + mitigasi singkat.',
+  writer: 'Kamu Rina, Writer.' + RULE + ' Jika diminta docs: ```md:README.md. Jika tanya saja: jawab teks tanpa file.',
+  docs: 'Kamu Putri, Docs.' + RULE + ' Dokumentasi singkat. Fence ```md: hanya jika diminta tulis docs.',
+  analyst: 'Kamu Bima, Analyst.' + RULE + ' Analisis singkat. Tanpa kode kecuali diminta.',
+  tracer: 'Kamu Sari, Tracer.' + RULE + ' Lacak alur. Diagram teks singkat.',
+}
+
+/** Apakah tugas hanya tanya/cek status (bukan buat file)? */
+export function isChatOnlyTask(task: string): boolean {
+  const t = task.toLowerCase().trim()
+  if (/buat|bikin|tulis|implement|kodekan|generate|scaffold|deploy|hapus file|push|commit/.test(t)) return false
+  if (/^(apa|apakah|kenapa|mengapa|bagaimana|coba|cek|test|tolong|jelaskan|ringkas)/.test(t)) return true
+  if (/\?$/.test(t)) return true
+  if (/sudah bisa|bisa masuk|status|terhubung|connected|akun/.test(t) && !/buat|bikin|implement/.test(t)) return true
+  return false
 }
 
 export function pickWorkers(task: string, powerMode: boolean): WorkerSpec[] {
@@ -62,17 +76,23 @@ export function pickWorkers(task: string, powerMode: boolean): WorkerSpec[] {
   const add = (id: string) => {
     const a = defaultAgents.find((x) => x.id === id)
     if (!a || out.some((w) => w.id === id)) return
-    out.push({ id, name: a.name, system: SYSTEMS[id] || `Kamu ${a.name}, ${a.role}.` })
+    out.push({ id, name: a.name, system: SYSTEMS[id] || `Kamu ${a.name}, ${a.role}.` + RULE })
+  }
+
+  if (isChatOnlyTask(task)) {
+    add('researcher')
+    if (powerMode) add('analyst')
+    return out.slice(0, 2)
   }
 
   const isBuild = /buat|bikin|tulis|implement|dashboard|aplikasi|app|website|halaman|fitur|kode|html|css|js|react/.test(t)
   const isFix = /perbaiki|fix|bug|error|debug|rusak|gagal/.test(t)
   const isReview = /review|audit|cek kode|code review/.test(t)
-  const isSecure = /keamanan|security|xss|auth|login|password|token/.test(t)
+  const isSecure = /keamanan|security|xss|auth|password|token secret|hardening/.test(t)
   const isUi = /ui|ux|desain|tampilan|css|style|warna/.test(t)
   const isDocs = /dokumentasi|readme|docs|panduan/.test(t)
   const isData = /analisis|data|laporan|metrik|chart|statistik/.test(t)
-  const isQa = /test|uji|qa|checklist/.test(t)
+  const isQa = /\b(test case|uji|qa|checklist)\b/.test(t)
   const isArch = /arsitektur|struktur|arsitek|scalable|modul/.test(t)
   const isExplore = /cari|telusuri|explore|bagaimana|dimana|repo/.test(t)
 
@@ -85,14 +105,14 @@ export function pickWorkers(task: string, powerMode: boolean): WorkerSpec[] {
   if (isSecure) add('security')
   if (isDocs || isBuild) add('writer')
   if (isDocs) add('docs')
-  if (isQa || powerMode) add('qa')
+  if (isQa) add('qa')
   if (isData) add('analyst')
   if (isFix && powerMode) add('tracer')
   if (powerMode && isBuild) add('simplifier')
 
   if (!out.length) {
-    add('coder')
-    add('writer')
+    add('researcher')
+    add('analyst')
   }
 
   const max = powerMode ? 6 : 4
