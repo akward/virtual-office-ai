@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useStore } from './store'
 import { PROVIDERS, SETUP_PRESETS, detectProviderFromBaseUrl, type SetupPresetId } from './llm'
-import { loadSupabaseConfig, saveSupabaseConfig, testSupabaseConnection, DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_ANON_KEY } from './supabase'
+import { VercelProfileSection, SupabaseProfileSection } from './ProfileSettings'
 import './App.css'
 
 function downloadFile(filename: string, content: string) {
@@ -67,9 +67,6 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
   const [newRepoPrivate, setNewRepoPrivate] = useState(false)
   const filteredRepos = repos.filter((r) => !repoFilter || r.full_name.toLowerCase().includes(repoFilter.toLowerCase()))
   const extras = config.extraKeys || []
-  const [sbUrl, setSbUrl] = useState(() => loadSupabaseConfig().url || DEFAULT_SUPABASE_URL)
-  const [sbKey, setSbKey] = useState(() => loadSupabaseConfig().anonKey || DEFAULT_SUPABASE_ANON_KEY)
-  const [sbMsg, setSbMsg] = useState('')
 
   return (
     <aside className={`sidebar sidebar-left ${open ? 'open' : 'collapsed'}`}>
@@ -126,43 +123,13 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
           <button type="button" className="btn-ghost" onClick={() => setConfig({
             extraKeys: [...extras, { id: crypto.randomUUID(), label: `Key #${extras.length + 3}`, apiKey: '', baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-20b' }],
           })}>➕ Tambah API Key</button>
-          <label className="field-label">Vercel Token</label>
-          <input type="password" value={config.vercelToken || ''} onChange={(e) => setConfig({ vercelToken: e.target.value })} />
           <label className="row-actions">
             <input type="checkbox" checked={powerMode} onChange={(e) => setPowerMode(e.target.checked)} /> ⚡ Full Power
           </label>
         </section>
 
-        <section className="side-block">
-          <h3>Database (Supabase)</h3>
-          <p className="help-text">Project baru: <b>virtual-office-ai</b> · tabel <code>vo_settings</code> + <code>vo_tasks</code>. URL & key sudah terisi default.</p>
-          <label className="field-label">Supabase URL</label>
-          <input value={sbUrl} onChange={(e) => setSbUrl(e.target.value)} placeholder="https://xxxx.supabase.co" />
-          <label className="field-label">Anon Key</label>
-          <input type="password" value={sbKey} onChange={(e) => setSbKey(e.target.value)} placeholder="eyJ..." />
-          <div className="row-actions" style={{ flexWrap: 'wrap', gap: 4 }}>
-            <button type="button" className="btn-ghost" onClick={() => {
-              saveSupabaseConfig({ url: sbUrl, anonKey: sbKey })
-              setSbMsg('Kredensial disimpan di browser.')
-            }}>💾 Simpan kredensial</button>
-            <button type="button" className="btn-ghost" onClick={async () => {
-              saveSupabaseConfig({ url: sbUrl, anonKey: sbKey })
-              try { setSbMsg(await testSupabaseConnection({ url: sbUrl.replace(/\/$/, ''), anonKey: sbKey })) }
-              catch (e: unknown) { setSbMsg(String(e)) }
-            }}>🔌 Test</button>
-          </div>
-          {sbMsg && <p className="help-text">{sbMsg}</p>}
-          <button type="button" className="btn-ghost" disabled={isSyncingSettings} onClick={async () => {
-            saveSupabaseConfig({ url: sbUrl, anonKey: sbKey })
-            try { await saveToBackend({ includeGithubToken: true }) }
-            catch (e: unknown) { addMessage('System', String(e)) }
-          }}>{isSyncingSettings ? 'Menyimpan...' : '☁️ Simpan ke database'}</button>
-          <button type="button" className="btn-ghost" disabled={isSyncingSettings} onClick={async () => {
-            saveSupabaseConfig({ url: sbUrl, anonKey: sbKey })
-            try { await loadFromBackend() }
-            catch (e: unknown) { addMessage('System', String(e)) }
-          }}>{isSyncingSettings ? 'Memuat...' : '⬇️ Muat dari database'}</button>
-        </section>
+        <VercelProfileSection />
+        <SupabaseProfileSection />
 
         <section className="side-block">
           <h3>Latih Agent</h3>
@@ -274,7 +241,7 @@ function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) 
           ))}
         </div>
       )}
-      {!config.apiKey && <p className="help-text" style={{ padding: '0.5rem' }}>Isi API Key LLM · Database Supabase sudah default.</p>}
+      {!config.apiKey && <p className="help-text" style={{ padding: '0.5rem' }}>Settings → pilih profil Vercel & Supabase (tidak ada default otomatis).</p>}
     </aside>
   )
 }
@@ -294,7 +261,7 @@ export default function App() {
       <main className="main-stage">
         <div className="office-header">
           <h1>Virtual Office AI</h1>
-          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'DB: virtual-office-ai (Supabase)'}</p>
+          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings → pilih Vercel & Supabase'}</p>
         </div>
         <OfficeFloor />
       </main>
