@@ -8,7 +8,6 @@ import { deployToVercel } from './vercel'
 import { loadMemory, saveMemory, teach, memoryBlock, parseSkillFromLLM, type AgentMemory as Mem } from './agentMemory'
 import { saveToBackendImpl, loadFromBackendImpl, bootstrapCloudSync, logTaskToSupabase } from './storeBackend'
 
-// NOTE: full store restored in follow-up if truncated — critical path: chatOnly
 export type StoreState = any
 
 export const useStore = create<any>((set, get) => ({
@@ -117,23 +116,37 @@ export const useStore = create<any>((set, get) => ({
 
       const chatOnly = isChatOnlyTask(userTask)
       const thinkSystem = chatOnly
-        ? `Kamu Budi, asisten kantor. Bahasa Indonesia. Jawab pertanyaan user SINGKAT dan JELAS (maks 8 baris). Jangan buat file. Jangan tulis thinking process. Jangan echo instruksi.\n${mem}`
-        : `Kamu Budi, PM. Bahasa Indonesia. Ringkas pemahaman tugas dalam 3-5 baris. Jangan echo instruksi. Jangan thinking process.\n${mem}`
+        ? `Kamu Budi, asisten Virtual Office. Bahasa Indonesia.
+Tugas user adalah PERTANYAAN / CEK STATUS, bukan membuat kode.
+Jawab singkat (maks 8 baris). Jangan buat file. Jangan tulis thinking process.
+Jika ditanya apakah akun bisa login: jelaskan cara cek di Settings → Connectors (status Connected) dan Settings → AI (API key terisi). Jangan mengarang hasil login.
+${mem}`
+        : `Kamu Budi, PM. Bahasa Indonesia. Ringkas pemahaman tugas 3-5 baris. Jangan echo instruksi. Jangan thinking process.\n${mem}`
 
       let thought = ''
       try {
-        const th = await callLLMMulti(config, thinkSystem, `Tugas user:\n${userTask}${richContext}`, chatOnly ? 500 : 400)
+        const th = await callLLMMulti(config, thinkSystem, `Tugas user:\n${userTask}${chatOnly ? '' : richContext}`, chatOnly ? 450 : 400)
         thought = th.text
-      } catch {
-        try { thought = await callLLM(config, thinkSystem, userTask + richContext, 400) }
-        catch { thought = chatOnly ? 'Siap menjawab.' : 'LANJUT' }
+      } catch (e1: unknown) {
+        try { thought = await callLLM(config, thinkSystem, userTask, 400) }
+        catch {
+          thought = chatOnly
+            ? 'Saya tidak bisa mengetes login akun secara langsung dari chat. Cek Settings → Connectors (hijau = Connected) dan Settings → AI (API key terisi). Jika status Off, hubungkan dulu lalu coba lagi.'
+            : 'LANJUT'
+        }
       }
-      const thoughtClean = sanitizeAgentChat(thought).slice(0, 400)
-      if (thoughtClean) addMessage('Budi (Manager)', thoughtClean)
-      await paceBetweenAgents(Math.min(pace, 4000))
+      let thoughtClean = sanitizeAgentChat(thought).slice(0, 500)
+      if (!thoughtClean || /^tidak ada respons/i.test(thoughtClean)) {
+        thoughtClean = chatOnly
+          ? 'Belum bisa dipastikan dari sini. Buka Settings → Connectors: pastikan GitHub/Vercel/Supabase berstatus Connected, dan Settings → AI berisi API key. Itu indikator akun/token siap dipakai.'
+          : 'LANJUT kerjakan tugas.'
+      }
+      addMessage('Budi (Manager)', thoughtClean)
+      await paceBetweenAgents(Math.min(pace, 2500))
 
       if (chatOnly) {
         updateAgent('manager', { status: 'done', currentTask: 'Selesai' })
+        addMessage('System', 'Mode tanya: tidak membuat file.')
         return
       }
 
