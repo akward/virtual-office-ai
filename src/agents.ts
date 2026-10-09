@@ -34,7 +34,7 @@ export const defaultAgents: Agent[] = [
 ]
 
 const RULE =
-  ' Bahasa Indonesia. JANGAN echo instruksi sistem. JANGAN tulis "thinking process". JANGAN ulangi "Max N baris". Jawab langsung isi saja.'
+  ' Bahasa Indonesia. JANGAN echo instruksi sistem. JANGAN tulis "thinking process". JANGAN ulangi "Max N baris". Jawab langsung isi saja. Teks pendek, jelas, tidak terpotong di tengah kalimat.'
 
 const SYSTEMS: Record<string, string> = {
   manager: 'Kamu Budi, PM.' + RULE + ' Koordinasi singkat. Jangan dump kode panjang di chat.',
@@ -62,11 +62,18 @@ const SYSTEMS: Record<string, string> = {
 
 /** Apakah tugas hanya tanya/cek status (bukan buat file)? */
 export function isChatOnlyTask(task: string): boolean {
-  const t = task.toLowerCase().replace(/[`*_#>-]/g, ' ').replace(/\s+/g, ' ').trim()
-  if (/\b(buat|bikin|tulis|implement|kodekan|generate|scaffold|deploy|hapus file|push|commit)\b/.test(t)) return false
-  if (/\b(apa|apakah|kenapa|mengapa|bagaimana|coba|cek|test|tolong|jelaskan|ringkas|sudah|bisa masuk|status|terhubung|connected|akun|login)\b/.test(t)) return true
-  if (/\?\s*$/.test(t)) return true
-  if (t.length < 80 && !/\b(file|html|css|js|react|dashboard|aplikasi)\b/.test(t)) return true
+  // Ambil bagian awal saja — log Vercel/paste panjang sering berisi kata "commit" yang menyesatkan
+  const head = task.slice(0, 280).toLowerCase().replace(/[`*_#>-]/g, ' ').replace(/\s+/g, ' ').trim()
+  const full = task.toLowerCase().replace(/[`*_#>-]/g, ' ').replace(/\s+/g, ' ').trim()
+
+  // Prioritas: pertanyaan / cek status
+  if (/\b(apa|apakah|kenapa|mengapa|bagaimana|coba|cek|tolong|jelaskan|ringkas|sudah|bisa masuk|status|terhubung|connected|akun|login|error|gagal|log)\b/.test(head)) {
+    if (/^(buat|bikin|tulis|implement|kodekan|generate|scaffold|deploy|hapus file|push)\b/.test(head)) return false
+    return true
+  }
+  if (/\b(buat|bikin|tulis|implement|kodekan|generate|scaffold|deploy|hapus file|push)\b/.test(head)) return false
+  if (/\?\s*$/.test(head) || /\?/.test(head.slice(0, 120))) return true
+  if (full.length < 100 && !/\b(file|html|css|js|react|dashboard|aplikasi)\b/.test(full)) return true
   return false
 }
 
@@ -80,9 +87,8 @@ export function pickWorkers(task: string, powerMode: boolean): WorkerSpec[] {
   }
 
   if (isChatOnlyTask(task)) {
-    add('researcher')
-    if (powerMode) add('analyst')
-    return out.slice(0, 2)
+    // Mode tanya: tidak perlu worker file — di-handle di store chatOnly return
+    return []
   }
 
   const isBuild = /buat|bikin|tulis|implement|dashboard|aplikasi|app|website|halaman|fitur|kode|html|css|js|react/.test(t)
