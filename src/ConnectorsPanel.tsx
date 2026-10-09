@@ -79,7 +79,8 @@ export function ConnectorsPanel() {
   }
   const saveCloud = () => saveToBackend({ includeGithubToken: true }).catch(() => {})
 
-  const ghOk = Boolean(github.connected && github.token)
+  // Token dari cloud = Connected (tidak wajib klik Connect lagi)
+  const ghOk = Boolean(github.token?.trim() && (github.connected || github.username))
   const vercelOk = Boolean(config.vercelToken?.trim())
   const sbOk = isSupabaseConfigured()
   const gmailOk = Boolean(connectors.gmailAccessToken)
