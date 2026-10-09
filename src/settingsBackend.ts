@@ -10,10 +10,17 @@ export type BackendSettings = {
   version: 1
   savedAt: string
   config: AppConfig
+  /** GitHub token tidak disimpan ulang di file jika kosong; client menggabungkan */
   github: Omit<GitHubSettings, 'token'> & { token?: string }
   powerMode: boolean
   agentMemory: AgentMemory
   connectors: Partial<ConnectorConfig>
+  /** Kredensial Supabase agar multi-device (URL + anon key) */
+  supabase?: { url: string; anonKey: string }
+}
+
+function settingsConfig(token: string, owner: string): GitHubConfig {
+  return { token, owner, repo: SETTINGS_REPO, branch: 'main' }
 }
 
 /** Pastikan repo privat vo-user-settings ada */
