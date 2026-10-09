@@ -202,7 +202,6 @@ export async function deployToVercel(opts: {
   return { url, id: res.data.id || '' }
 }
 
-/** Cek token Vercel: user login + team */
 export async function probeVercelAccount(token: string): Promise<string> {
   if (!token?.trim()) return 'Vercel: token belum diisi di Settings.'
   try {
@@ -230,4 +229,79 @@ export async function probeVercelAccount(token: string): Promise<string> {
   } catch (e: unknown) {
     return 'Vercel: gagal menghubungi API — ' + (e instanceof Error ? e.message : String(e))
   }
+}
+
+/** Set / upsert environment variables on a Vercel project */
+export async function setVercelEnvVars(opts: {
+  token: string
+  projectNameOrId: string
+  teamId?: string
+  vars: { key: string; value: string; target?: ('production' | 'preview' | 'development')[] }[]
+}): Promise<{ ok: string[]; errors: string[] }> {
+  const token = opts.token.trim()
+  if (!token) throw new Error('Vercel token kosong')
+  if (!opts.projectNameOrId) throw new Error('Nama/ID project Vercel kosong')
+  if (!opts.vars?.length) return { ok: [], errors: [] }
+
+  const qs = new URLSearchParams({ upsert: 'true' })
+  if (opts.teamId) qs.set('teamId', opts.teamId)
+
+  const body = opts.vars.map((v) => ({
+    key: v.key,
+    value: v.value,
+    type: 'encrypted' as const,
+    target: v.target || (['production', 'preview', 'development'] as const),
+  }))
+
+  const res = await vercelFetch(
+    token,
+    `/v10/projects/${encodeURIComponent(opts.projectNameOrId)}/env?${qs.toString()}`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body.length === 1 ? body[0] : body),
+    }
+  )
+
+  if (!res.ok) {
+    const ok: string[] = []
+    const errors: string[] = []
+    for (const v of body) {
+      const one = await vercelFetch(
+        token,
+        `/v10/projects/${encodeURIComponent(opts.projectNameOrId)}/env?${qs.toString()}`,
+        { method: 'POST', body: JSON.stringify(v) }
+      )
+      if (one.ok) ok.push(v.key)
+      else errors.push(`${v.key}: ${errMsg(one.data, String(one.status))}`)
+    }
+    if (!ok.length) throw new Error(errors.join('; ') || errMsg(res.data, `Vercel env ${res.status}`))
+    return { ok, errors }
+  }
+
+  return { ok: opts.vars.map((v) => v.key), errors: [] }
+}
+
+export async function findVercelProject(
+  token: string,
+  name: string
+): Promise<{ id: string; name: string; teamId?: string } | null> {
+  const list = await vercelFetch(token, '/v9/projects?limit=100')
+  if (list.ok && Array.isArray(list.data?.projects)) {
+    const found = list.data.projects.find(
+      (p: any) => p.name === name || p.name === name.replace(/_/g, '-')
+    )
+    if (found) return { id: found.id, name: found.name }
+  }
+  const teams = await vercelFetch(token, '/v2/teams?limit=20')
+  if (teams.ok && Array.isArray(teams.data?.teams)) {
+    for (const team of teams.data.teams) {
+      const tid = team.id as string
+      const tList = await vercelFetch(token, `/v9/projects?limit=100&teamId=${tid}`)
+      if (tList.ok && Array.isArray(tList.data?.projects)) {
+        const found = tList.data.projects.find((p: any) => p.name === name)
+        if (found) return { id: found.id, name: found.name, teamId: tid }
+      }
+    }
+  }
+  return null
 }
