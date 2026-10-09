@@ -62,11 +62,11 @@ const SYSTEMS: Record<string, string> = {
 
 /** Apakah tugas hanya tanya/cek status (bukan buat file)? */
 export function isChatOnlyTask(task: string): boolean {
-  const t = task.toLowerCase().trim()
-  if (/buat|bikin|tulis|implement|kodekan|generate|scaffold|deploy|hapus file|push|commit/.test(t)) return false
-  if (/^(apa|apakah|kenapa|mengapa|bagaimana|coba|cek|test|tolong|jelaskan|ringkas)/.test(t)) return true
-  if (/\?$/.test(t)) return true
-  if (/sudah bisa|bisa masuk|status|terhubung|connected|akun/.test(t) && !/buat|bikin|implement/.test(t)) return true
+  const t = task.toLowerCase().replace(/[`*_#>-]/g, ' ').replace(/\s+/g, ' ').trim()
+  if (/\b(buat|bikin|tulis|implement|kodekan|generate|scaffold|deploy|hapus file|push|commit)\b/.test(t)) return false
+  if (/\b(apa|apakah|kenapa|mengapa|bagaimana|coba|cek|test|tolong|jelaskan|ringkas|sudah|bisa masuk|status|terhubung|connected|akun|login)\b/.test(t)) return true
+  if (/\?\s*$/.test(t)) return true
+  if (t.length < 80 && !/\b(file|html|css|js|react|dashboard|aplikasi)\b/.test(t)) return true
   return false
 }
 
