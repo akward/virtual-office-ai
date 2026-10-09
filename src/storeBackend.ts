@@ -8,8 +8,15 @@ import {
   upsertVoSettings,
   loadVoSettings,
   insertVoTask,
-  DEFAULT_SUPABASE_URL,
-  DEFAULT_SUPABASE_ANON_KEY,
+  loadSbProfiles,
+  saveSbProfiles,
+  setActiveSbId,
+  getActiveSbId,
+  loadVercelProfiles,
+  saveVercelProfiles,
+  setActiveVercelId,
+  getActiveVercelId,
+  EXAMPLE_SB_PROFILES,
 } from './supabase'
 
 type GetSet = { get: () => any; set: (p: any) => void }
@@ -55,12 +62,24 @@ function buildPayload(get: () => any, username: string, opts?: { includeGithubTo
       telegramBotToken: connectors.telegramBotToken,
       telegramChatId: connectors.telegramChatId,
       gmailEmail: connectors.gmailEmail,
+      slackWebhookUrl: connectors.slackWebhookUrl,
+      discordWebhookUrl: connectors.discordWebhookUrl,
+      genericWebhookUrl: connectors.genericWebhookUrl,
+      neonApiKey: connectors.neonApiKey,
+      neonConnectionString: connectors.neonConnectionString,
+      notionToken: connectors.notionToken,
+      cloudflareToken: connectors.cloudflareToken,
+      cloudflareAccountId: connectors.cloudflareAccountId,
     },
-    supabase: {
-      url: (sb.url || DEFAULT_SUPABASE_URL).replace(/\/$/, ''),
-      anonKey: sb.anonKey || DEFAULT_SUPABASE_ANON_KEY,
-    },
-  }
+    supabase: sb.url && sb.anonKey ? {
+      url: sb.url.replace(/\/$/, ''),
+      anonKey: sb.anonKey,
+    } : undefined,
+    sbProfiles: loadSbProfiles(),
+    sbActiveId: getActiveSbId(),
+    vercelProfiles: loadVercelProfiles().map((p) => ({ ...p })),
+    vercelActiveId: getActiveVercelId(),
+  } as BackendSettings
 }
 
 function applyPayload(get: () => any, set: (p: any) => void, data: BackendSettings, username: string, silent?: boolean) {
@@ -84,29 +103,42 @@ function applyPayload(get: () => any, set: (p: any) => void, data: BackendSettin
   }
   if (data.connectors) setConnectors(data.connectors)
   if (data.github) {
+    const tok = data.github.token || get().github.token || ''
+    const uname = data.github.username || username || get().github.username || ''
     setGithub({
-      owner: data.github.owner || get().github.owner,
+      owner: data.github.owner || get().github.owner || uname,
       repo: data.github.repo || get().github.repo,
       branch: data.github.branch || 'main',
       repoFullName: data.github.repoFullName || get().github.repoFullName,
-      username: data.github.username || username,
+      username: uname,
       autoPush: data.github.autoPush !== false,
-      ...(data.github.token ? { token: data.github.token } : {}),
+      token: tok,
+      connected: Boolean(tok) || Boolean(data.github.connected),
     })
   }
-  if (data.supabase?.url || data.supabase?.anonKey) {
-    saveSupabaseConfig({
-      url: data.supabase.url || DEFAULT_SUPABASE_URL,
-      anonKey: data.supabase.anonKey || DEFAULT_SUPABASE_ANON_KEY,
-    })
+  const anyData = data as any
+  if (Array.isArray(anyData.sbProfiles) && anyData.sbProfiles.length) {
+    saveSbProfiles(anyData.sbProfiles)
+    if (anyData.sbActiveId) setActiveSbId(anyData.sbActiveId)
+  }
+  if (data.supabase?.url && data.supabase?.anonKey) {
+    saveSupabaseConfig({ url: data.supabase.url, anonKey: data.supabase.anonKey })
+  }
+  if (Array.isArray(anyData.vercelProfiles) && anyData.vercelProfiles.length) {
+    saveVercelProfiles(anyData.vercelProfiles)
+    if (anyData.vercelActiveId) setActiveVercelId(anyData.vercelActiveId)
+    const active = anyData.vercelProfiles.find((p: any) => p.id === anyData.vercelActiveId)
+    if (active?.token && !data.config?.vercelToken) {
+      setConfig({ vercelToken: active.token })
+    }
   }
   setCloudUserKey(username)
   if (!silent) {
     const bits: string[] = []
     if (data.config?.apiKey || data.config?.apiKey2) bits.push('API')
-    if (data.config?.vercelToken) bits.push('Vercel')
+    if (data.config?.vercelToken || anyData.vercelProfiles?.length) bits.push('Vercel')
     if (data.github?.token) bits.push('GitHub')
-    if (data.supabase?.anonKey) bits.push('Supabase')
+    if (data.supabase?.anonKey || anyData.sbProfiles?.length) bits.push('Supabase')
     addMessage(
       'System',
       bits.length
@@ -226,7 +258,29 @@ export async function loadFromBackendImpl({ get, set }: GetSet, opts?: { silent?
 
 export async function bootstrapCloudSync({ get, set }: GetSet) {
   try {
+    try {
+      const list = loadSbProfiles()
+      if (!list.length && EXAMPLE_SB_PROFILES.length) {
+        saveSbProfiles(EXAMPLE_SB_PROFILES)
+        setActiveSbId(EXAMPLE_SB_PROFILES[0].id)
+      } else if (list.length && !getActiveSbId()) {
+        setActiveSbId(list[0].id)
+      }
+    } catch {
+      /* */
+    }
+
     await loadFromBackendImpl({ get, set }, { silent: false })
+
+    const st = get()
+    if (st.github?.token && typeof st.connectWithToken === 'function') {
+      try {
+        await st.connectWithToken()
+      } catch (e) {
+        console.warn('auto github reconnect', e)
+        if (st.setGithub) st.setGithub({ connected: true })
+      }
+    }
   } catch (e: unknown) {
     console.warn('bootstrapCloudSync', e)
   }
