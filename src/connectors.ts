@@ -1,6 +1,6 @@
-/** External connectors: Gmail (OAuth PKCE), Telegram, Slack/Discord webhooks */
+/** External connectors: Gmail (OAuth PKCE), Telegram, Slack/Discord, Neon, Notion, Cloudflare, webhooks */
 
-export type ConnectorId = 'gmail' | 'telegram' | 'slack' | 'discord' | 'webhook'
+export type ConnectorId = 'gmail' | 'telegram' | 'slack' | 'discord' | 'webhook' | 'neon' | 'notion' | 'cloudflare'
 
 export interface ConnectorConfig {
   gmailClientId: string
@@ -13,6 +13,11 @@ export interface ConnectorConfig {
   slackWebhookUrl: string
   discordWebhookUrl: string
   genericWebhookUrl: string
+  neonApiKey: string
+  neonConnectionString: string
+  notionToken: string
+  cloudflareToken: string
+  cloudflareAccountId: string
 }
 
 export const defaultConnectors = (): ConnectorConfig => {
@@ -28,6 +33,11 @@ export const defaultConnectors = (): ConnectorConfig => {
       slackWebhookUrl: '',
       discordWebhookUrl: '',
       genericWebhookUrl: '',
+      neonApiKey: '',
+      neonConnectionString: '',
+      notionToken: '',
+      cloudflareToken: '',
+      cloudflareAccountId: '',
     }
   }
   return {
@@ -41,6 +51,11 @@ export const defaultConnectors = (): ConnectorConfig => {
     slackWebhookUrl: localStorage.getItem('vo_slack_wh') || '',
     discordWebhookUrl: localStorage.getItem('vo_discord_wh') || '',
     genericWebhookUrl: localStorage.getItem('vo_generic_wh') || '',
+    neonApiKey: localStorage.getItem('vo_neon_key') || '',
+    neonConnectionString: localStorage.getItem('vo_neon_cs') || '',
+    notionToken: localStorage.getItem('vo_notion_token') || '',
+    cloudflareToken: localStorage.getItem('vo_cf_token') || '',
+    cloudflareAccountId: localStorage.getItem('vo_cf_account') || '',
   }
 }
 
@@ -57,6 +72,11 @@ export function saveConnectors(c: Partial<ConnectorConfig>) {
     vo_slack_wh: 'slackWebhookUrl',
     vo_discord_wh: 'discordWebhookUrl',
     vo_generic_wh: 'genericWebhookUrl',
+    vo_neon_key: 'neonApiKey',
+    vo_neon_cs: 'neonConnectionString',
+    vo_notion_token: 'notionToken',
+    vo_cf_token: 'cloudflareToken',
+    vo_cf_account: 'cloudflareAccountId',
   }
   for (const [lsKey, field] of Object.entries(map)) {
     if (c[field] !== undefined) {
@@ -257,6 +277,9 @@ export function connectorsStatus(c: ConnectorConfig): string {
   if (c.slackWebhookUrl) lines.push('Slack: terhubung')
   if (c.discordWebhookUrl) lines.push('Discord: terhubung')
   if (c.genericWebhookUrl) lines.push('Webhook: terhubung')
+  if (c.neonApiKey || c.neonConnectionString) lines.push('Neon: terhubung')
+  if (c.notionToken) lines.push('Notion: terhubung')
+  if (c.cloudflareToken) lines.push('Cloudflare: terhubung')
   return lines.join(' | ')
 }
 
