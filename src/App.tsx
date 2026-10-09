@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useStore } from './store'
-import { PROVIDERS, SETUP_PRESETS, detectProviderFromBaseUrl, type SetupPresetId } from './llm'
-import { VercelProfileSection, SupabaseProfileSection } from './ProfileSettings'
-import { ConnectorsPanel } from './ConnectorsPanel'
+import { SettingsSimple } from './SettingsSimple'
 import './App.css'
 
 function downloadFile(filename: string, content: string) {
@@ -51,127 +49,6 @@ function OfficeFloor() {
         </div>
       ))}
     </div>
-  )
-}
-
-function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const {
-    config, github, repos, isLoadingRepos, isCreatingRepo,
-    setConfig, setGithub, connectWithToken, selectRepo, createNewRepo, addMessage,
-    connectors, setConnectors, connectGmail, powerMode, setPowerMode,
-    agentMemory, teachAgent, clearMemory,
-    saveToBackend, loadFromBackend, isSyncingSettings,
-  } = useStore()
-  const [provider, setProvider] = useState<keyof typeof PROVIDERS>(() => detectProviderFromBaseUrl(config.baseUrl))
-  const [repoFilter, setRepoFilter] = useState('')
-  const [newRepoName, setNewRepoName] = useState('')
-  const [newRepoPrivate, setNewRepoPrivate] = useState(false)
-  const filteredRepos = repos.filter((r) => !repoFilter || r.full_name.toLowerCase().includes(repoFilter.toLowerCase()))
-  const extras = config.extraKeys || []
-
-  return (
-    <aside className={`sidebar sidebar-left ${open ? 'open' : 'collapsed'}`}>
-      <div className="sidebar-header">
-        <h2>Settings</h2>
-        <button type="button" className="icon-btn" onClick={onClose} title="Sembunyikan">«</button>
-      </div>
-      <div className="sidebar-scroll">
-        <section className="side-block">
-          <h3>LLM — API utama</h3>
-          <p className="help-text">Pilih setup default, lalu tempel API Key.</p>
-          <div className="row-actions" style={{ flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-            {(Object.keys(SETUP_PRESETS) as SetupPresetId[]).map((id) => (
-              <button key={id} type="button" className="btn-ghost"
-                style={detectProviderFromBaseUrl(config.baseUrl) === id ? { outline: '2px solid #3b82f6', fontWeight: 600 } : undefined}
-                onClick={() => {
-                  const pre = SETUP_PRESETS[id]
-                  setProvider(id === 'gemini' || id === 'groq' || id === 'openrouter' ? id : 'custom')
-                  setConfig({ baseUrl: pre.primary.baseUrl, model: pre.primary.model, baseUrl2: pre.secondary.baseUrl, model2: pre.secondary.model })
-                }}>
-                {id === 'gemini' ? '⭐ Gemini' : id === 'groq' ? '⚡ Groq' : '🔀 OpenRouter'}
-              </button>
-            ))}
-          </div>
-          <label className="field-label">Provider / API utama</label>
-          <select value={provider} onChange={(e) => {
-            const p = e.target.value as keyof typeof PROVIDERS
-            setProvider(p)
-            setConfig({ baseUrl: PROVIDERS[p].baseUrl, model: PROVIDERS[p].models[0] })
-          }}>
-            {Object.entries(PROVIDERS).map(([k, v]) => <option key={k} value={k}>{v.name}</option>)}
-          </select>
-          <label className="field-label">API Key #1 (utama)</label>
-          <input type="password" value={config.apiKey} onChange={(e) => setConfig({ apiKey: e.target.value })} placeholder="Tempel API Key" />
-          <label className="field-label">Base URL #1</label>
-          <input value={config.baseUrl} onChange={(e) => setConfig({ baseUrl: e.target.value })} />
-          <label className="field-label">Model #1</label>
-          <input value={config.model} onChange={(e) => setConfig({ model: e.target.value })} />
-          <p className="help-text">{PROVIDERS[provider]?.help}</p>
-          <label className="field-label">API Key #2 (fallback / OpenRouter)</label>
-          <input type="password" value={config.apiKey2 || ''} onChange={(e) => setConfig({ apiKey2: e.target.value })} placeholder="sk-or-v1-..." />
-          <input value={config.baseUrl2 || ''} onChange={(e) => setConfig({ baseUrl2: e.target.value })} placeholder="https://openrouter.ai/api/v1" />
-          <input value={config.model2 || ''} onChange={(e) => setConfig({ model2: e.target.value })} placeholder="openrouter/free" />
-          <label className="field-label">API Key tambahan</label>
-          {extras.map((ek, idx) => (
-            <div key={ek.id} style={{ border: '1px solid #333', borderRadius: 8, padding: '0.5rem', marginBottom: '0.5rem' }}>
-              <input value={ek.label} onChange={(e) => { const next = [...extras]; next[idx] = { ...ek, label: e.target.value }; setConfig({ extraKeys: next }) }} placeholder="Label" />
-              <input type="password" value={ek.apiKey} onChange={(e) => { const next = [...extras]; next[idx] = { ...ek, apiKey: e.target.value }; setConfig({ extraKeys: next }) }} placeholder="API Key" />
-              <input value={ek.baseUrl} onChange={(e) => { const next = [...extras]; next[idx] = { ...ek, baseUrl: e.target.value }; setConfig({ extraKeys: next }) }} placeholder="Base URL" />
-              <input value={ek.model} onChange={(e) => { const next = [...extras]; next[idx] = { ...ek, model: e.target.value }; setConfig({ extraKeys: next }) }} placeholder="Model" />
-              <button type="button" className="btn-ghost" onClick={() => setConfig({ extraKeys: extras.filter((x) => x.id !== ek.id) })}>✕ Hapus</button>
-            </div>
-          ))}
-          <button type="button" className="btn-ghost" onClick={() => setConfig({
-            extraKeys: [...extras, { id: crypto.randomUUID(), label: `Key #${extras.length + 3}`, apiKey: '', baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-20b' }],
-          })}>➕ Tambah API Key</button>
-          <label className="row-actions">
-            <input type="checkbox" checked={powerMode} onChange={(e) => setPowerMode(e.target.checked)} /> ⚡ Full Power
-          </label>
-        </section>
-
-        <VercelProfileSection />
-        <SupabaseProfileSection />
-
-        <section className="side-block">
-          <h3>Latih Agent</h3>
-          <p className="help-text">Memori: {agentMemory.prefs.length} pref, {agentMemory.lessons.length} pelajaran</p>
-          <button className="btn-ghost" type="button" onClick={() => {
-            const t = window.prompt('Pelajaran:')
-            if (t?.trim()) { teachAgent(t.trim()); addMessage('System', '📚 ' + t.trim()) }
-          }}>➕ Tambah pelajaran</button>
-          <button className="btn-ghost" type="button" onClick={() => { if (window.confirm('Reset memori?')) clearMemory() }}>🗑️ Reset</button>
-        </section>
-
-        <section className="side-block">
-          <h3>GitHub {github.connected && <span className="badge-ok">● @{github.username}</span>}</h3>
-          <input type="password" value={github.token} onChange={(e) => setGithub({ token: e.target.value })} placeholder="ghp_..." />
-          <button className="btn-ghost" disabled={isLoadingRepos || !github.token.trim()} onClick={async () => {
-            try { await connectWithToken() } catch (e: unknown) { addMessage('System', String(e)) }
-          }}>{isLoadingRepos ? 'Memuat...' : 'Hubungkan / Refresh'}</button>
-          {github.token.trim() && (<>
-            <select value={github.repoFullName} onChange={async (e) => {
-              try { await selectRepo(e.target.value) } catch (err: unknown) { addMessage('System', String(err)) }
-            }}>
-              <option value="">— pilih repo —</option>
-              {filteredRepos.map((r) => <option key={r.full_name} value={r.full_name}>{r.full_name}</option>)}
-            </select>
-            <div className="row-actions">
-              <input value={newRepoName} onChange={(e) => setNewRepoName(e.target.value)} placeholder="nama-repo-baru" />
-              <label><input type="checkbox" checked={newRepoPrivate} onChange={(e) => setNewRepoPrivate(e.target.checked)} /> Private</label>
-            </div>
-            <button className="btn-ghost" disabled={isCreatingRepo || !newRepoName.trim()} onClick={async () => {
-              try { await createNewRepo(newRepoName.trim(), { private: newRepoPrivate }); setNewRepoName('') }
-              catch (e: unknown) { addMessage('System', String(e)) }
-            }}>{isCreatingRepo ? '...' : 'Buat repo'}</button>
-            <label className="row-actions">
-              <input type="checkbox" checked={github.autoPush} onChange={(e) => setGithub({ autoPush: e.target.checked })} /> Auto-push
-            </label>
-          </>)}
-        </section>
-
-        <ConnectorsPanel />
-      </div>
-    </aside>
   )
 }
 
@@ -234,7 +111,7 @@ function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) 
           ))}
         </div>
       )}
-      {!config.apiKey && <p className="help-text" style={{ padding: '0.5rem' }}>Settings → pilih profil Vercel & Supabase (tidak ada default otomatis).</p>}
+      {!config.apiKey && <p className="help-text" style={{ padding: '0.5rem' }}>Settings → AI → paste API key</p>}
     </aside>
   )
 }
@@ -250,11 +127,11 @@ export default function App() {
   return (
     <div className="app-shell">
       {!leftOpen && <button type="button" className="rail-toggle rail-left" onClick={() => setLeftOpen(true)}>⚙</button>}
-      <SettingsSidebar open={leftOpen} onClose={() => setLeftOpen(false)} />
+      <SettingsSimple open={leftOpen} onClose={() => setLeftOpen(false)} />
       <main className="main-stage">
         <div className="office-header">
           <h1>Virtual Office AI</h1>
-          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings → Connectors'}</p>
+          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings → AI / Connectors'}</p>
         </div>
         <OfficeFloor />
       </main>
