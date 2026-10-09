@@ -4,15 +4,17 @@ import { getAuthenticatedUser } from './github'
 import {
   isSupabaseConfigured,
   loadSupabaseConfig,
+  saveSupabaseConfig,
   upsertVoSettings,
   loadVoSettings,
   insertVoTask,
+  DEFAULT_SUPABASE_URL,
+  DEFAULT_SUPABASE_ANON_KEY,
 } from './supabase'
 
 type GetSet = { get: () => any; set: (p: any) => void }
 
 const CLOUD_USER_KEY = 'vo_cloud_user'
-/** User key bersama agar device manapun memuat setting yang sama */
 export const SHARED_CLOUD_KEYS = ['akward', 'default'] as const
 
 export function getCloudUserKey(githubUsername?: string): string {
@@ -31,6 +33,7 @@ export function setCloudUserKey(key: string) {
 
 function buildPayload(get: () => any, username: string, opts?: { includeGithubToken?: boolean }): BackendSettings {
   const { github, config, powerMode, agentMemory, connectors } = get()
+  const sb = loadSupabaseConfig()
   return {
     version: 1,
     savedAt: new Date().toISOString(),
@@ -43,7 +46,7 @@ function buildPayload(get: () => any, username: string, opts?: { includeGithubTo
       repoFullName: github.repoFullName,
       username,
       autoPush: github.autoPush,
-      ...(opts?.includeGithubToken ? { token: github.token } : {}),
+      ...(opts?.includeGithubToken !== false && github.token ? { token: github.token } : {}),
     },
     powerMode,
     agentMemory,
@@ -53,12 +56,22 @@ function buildPayload(get: () => any, username: string, opts?: { includeGithubTo
       telegramChatId: connectors.telegramChatId,
       gmailEmail: connectors.gmailEmail,
     },
+    supabase: {
+      url: (sb.url || DEFAULT_SUPABASE_URL).replace(/\/$/, ''),
+      anonKey: sb.anonKey || DEFAULT_SUPABASE_ANON_KEY,
+    },
   }
 }
 
 function applyPayload(get: () => any, set: (p: any) => void, data: BackendSettings, username: string, silent?: boolean) {
   const { setConfig, setGithub, setPowerMode, setConnectors, addMessage } = get()
-  if (data.config) setConfig({ ...data.config, extraKeys: data.config.extraKeys || [] })
+  if (data.config) {
+    setConfig({
+      ...data.config,
+      extraKeys: data.config.extraKeys || [],
+      vercelToken: data.config.vercelToken || '',
+    })
+  }
   if (data.powerMode !== undefined) setPowerMode(!!data.powerMode)
   if (data.agentMemory) {
     const mem = {
@@ -81,14 +94,32 @@ function applyPayload(get: () => any, set: (p: any) => void, data: BackendSettin
       ...(data.github.token ? { token: data.github.token } : {}),
     })
   }
+  if (data.supabase?.url || data.supabase?.anonKey) {
+    saveSupabaseConfig({
+      url: data.supabase.url || DEFAULT_SUPABASE_URL,
+      anonKey: data.supabase.anonKey || DEFAULT_SUPABASE_ANON_KEY,
+    })
+  }
   setCloudUserKey(username)
   if (!silent) {
-    const hasKey = Boolean(data.config?.apiKey || data.config?.apiKey2)
-    addMessage('System', hasKey ? `☁️ Setting cloud dimuat (${username}). API siap.` : `☁️ Setting cloud dimuat (${username}).`)
+    const bits: string[] = []
+    if (data.config?.apiKey || data.config?.apiKey2) bits.push('API')
+    if (data.config?.vercelToken) bits.push('Vercel')
+    if (data.github?.token) bits.push('GitHub')
+    if (data.supabase?.anonKey) bits.push('Supabase')
+    addMessage(
+      'System',
+      bits.length
+        ? `☁️ Cloud dimuat (${username}): ${bits.join(', ')} siap multi-device.`
+        : `☁️ Setting cloud dimuat (${username}).`
+    )
   }
 }
 
-async function loadFromSupabaseAny(sb: ReturnType<typeof loadSupabaseConfig>, preferred: string): Promise<{ raw: unknown; key: string } | null> {
+async function loadFromSupabaseAny(
+  sb: ReturnType<typeof loadSupabaseConfig>,
+  preferred: string
+): Promise<{ raw: unknown; key: string } | null> {
   const keys = Array.from(new Set([preferred, ...SHARED_CLOUD_KEYS]))
   for (const key of keys) {
     try {
@@ -118,7 +149,9 @@ export async function saveToBackendImpl(
       }
     }
 
-    const payload = buildPayload(get, username, opts)
+    const payload = buildPayload(get, username, {
+      includeGithubToken: opts?.includeGithubToken !== false,
+    })
     const sb = loadSupabaseConfig()
 
     if (isSupabaseConfigured(sb)) {
@@ -130,7 +163,15 @@ export async function saveToBackendImpl(
           /* mirror optional */
         }
       }
-      if (!opts?.silent) addMessage('System', `☁️ Disimpan ke cloud (user: ${username}).`)
+      if (!opts?.silent) {
+        const hasV = Boolean(payload.config?.vercelToken)
+        addMessage(
+          'System',
+          hasV
+            ? `☁️ Disimpan ke cloud (${username}): API + Vercel + Supabase.`
+            : `☁️ Disimpan ke cloud (user: ${username}).`
+        )
+      }
       return
     }
 
@@ -161,7 +202,7 @@ export async function loadFromBackendImpl({ get, set }: GetSet, opts?: { silent?
     if (isSupabaseConfigured(sb)) {
       const found = await loadFromSupabaseAny(sb, username)
       if (!found) {
-        if (!opts?.silent) addMessage('System', 'Cloud: belum ada setting. Isi API lalu akan tersimpan otomatis.')
+        if (!opts?.silent) addMessage('System', 'Cloud: belum ada setting. Isi API/Vercel lalu tersimpan otomatis.')
         return
       }
       applyPayload(get, set, found.raw as BackendSettings, found.key, opts?.silent)
@@ -183,7 +224,6 @@ export async function loadFromBackendImpl({ get, set }: GetSet, opts?: { silent?
   }
 }
 
-/** Dipanggil sekali saat app buka — sync cloud tanpa perlu klik manual */
 export async function bootstrapCloudSync({ get, set }: GetSet) {
   try {
     await loadFromBackendImpl({ get, set }, { silent: false })
@@ -194,7 +234,6 @@ export async function bootstrapCloudSync({ get, set }: GetSet) {
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 
-/** Debounce simpan ke cloud setelah ubah API key / setting */
 export function scheduleCloudSave(getSet: GetSet) {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
