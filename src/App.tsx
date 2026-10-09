@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useStore } from './store'
 import { PROVIDERS, SETUP_PRESETS, detectProviderFromBaseUrl, type SetupPresetId } from './llm'
 import { VercelProfileSection, SupabaseProfileSection } from './ProfileSettings'
+import { ConnectorsPanel } from './ConnectorsPanel'
 import './App.css'
 
 function downloadFile(filename: string, content: string) {
@@ -168,15 +169,7 @@ function SettingsSidebar({ open, onClose }: { open: boolean; onClose: () => void
           </>)}
         </section>
 
-        <section className="side-block">
-          <h3>Konektor</h3>
-          <input type="text" value={connectors.gmailClientId} onChange={(e) => setConnectors({ gmailClientId: e.target.value })} placeholder="Gmail OAuth Client ID" />
-          <button className="btn-ghost" disabled={!connectors.gmailClientId.trim()} onClick={async () => {
-            try { await connectGmail() } catch (e: unknown) { alert(String(e)) }
-          }}>{connectors.gmailAccessToken ? 'Reconnect Gmail' : 'Hubungkan Gmail'}</button>
-          <input type="password" value={connectors.telegramBotToken} onChange={(e) => setConnectors({ telegramBotToken: e.target.value })} placeholder="Telegram bot token" />
-          <input type="text" value={connectors.telegramChatId} onChange={(e) => setConnectors({ telegramChatId: e.target.value })} placeholder="Telegram chat ID" />
-        </section>
+        <ConnectorsPanel />
       </div>
     </aside>
   )
@@ -261,7 +254,7 @@ export default function App() {
       <main className="main-stage">
         <div className="office-header">
           <h1>Virtual Office AI</h1>
-          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings → pilih Vercel & Supabase'}</p>
+          <p>{github.repoFullName ? <>Repo: <b>{github.repoFullName}</b></> : 'Settings → Connectors'}</p>
         </div>
         <OfficeFloor />
       </main>
