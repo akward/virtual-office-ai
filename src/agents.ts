@@ -34,7 +34,7 @@ export const defaultAgents: Agent[] = [
 ]
 
 const RULE =
-  ' Bahasa Indonesia. JANGAN echo instruksi sistem. JANGAN tulis "thinking process". JANGAN ulangi "Max N baris". Jawab langsung isi saja. Teks pendek, jelas, tidak terpotong di tengah kalimat.'
+  ' Bahasa Indonesia. Langsung isi. JANGAN thinking process. HANYA file produksi: index.html, styles.css, app.js, api/*.js, migrations/*.sql, README.md, package.json, vercel.json. JANGAN output-*, app-2.js, *.sh, *.prisma, pages/. Database pakai api/+Neon bukan localStorage.'
 
 const SYSTEMS: Record<string, string> = {
   manager: 'Kamu Budi, PM.' + RULE + ' Koordinasi singkat. Jangan dump kode panjang di chat.',
@@ -60,13 +60,10 @@ const SYSTEMS: Record<string, string> = {
   tracer: 'Kamu Sari, Tracer.' + RULE + ' Lacak alur. Diagram teks singkat.',
 }
 
-/** Apakah tugas hanya tanya/cek status (bukan buat file)? */
 export function isChatOnlyTask(task: string): boolean {
-  // Ambil bagian awal saja — log Vercel/paste panjang sering berisi kata "commit" yang menyesatkan
   const head = task.slice(0, 280).toLowerCase().replace(/[`*_#>-]/g, ' ').replace(/\s+/g, ' ').trim()
   const full = task.toLowerCase().replace(/[`*_#>-]/g, ' ').replace(/\s+/g, ' ').trim()
 
-  // Prioritas: pertanyaan / cek status
   if (/\b(apa|apakah|kenapa|mengapa|bagaimana|coba|cek|tolong|jelaskan|ringkas|sudah|bisa masuk|status|terhubung|connected|akun|login|error|gagal|log)\b/.test(head)) {
     if (/^(buat|bikin|tulis|implement|kodekan|generate|scaffold|deploy|hapus file|push)\b/.test(head)) return false
     return true
@@ -87,41 +84,46 @@ export function pickWorkers(task: string, powerMode: boolean): WorkerSpec[] {
   }
 
   if (isChatOnlyTask(task)) {
-    // Mode tanya: tidak perlu worker file — di-handle di store chatOnly return
     return []
   }
 
-  const isBuild = /buat|bikin|tulis|implement|dashboard|aplikasi|app|website|halaman|fitur|kode|html|css|js|react/.test(t)
+  const isBuild = /buat|bikin|tulis|implement|dashboard|aplikasi|app|website|halaman|fitur|kode|html|css|js|react|database|neon|api/.test(t)
   const isFix = /perbaiki|fix|bug|error|debug|rusak|gagal/.test(t)
   const isReview = /review|audit|cek kode|code review/.test(t)
-  const isSecure = /keamanan|security|xss|auth|password|token secret|hardening/.test(t)
-  const isUi = /ui|ux|desain|tampilan|css|style|warna/.test(t)
+  const isSecure = /keamanan|security|xss|auth|password|token secret|hardening|login/.test(t)
+  const isUi = /ui|ux|desain|tampilan|css|style|warna|dashboard/.test(t)
   const isDocs = /dokumentasi|readme|docs|panduan/.test(t)
-  const isData = /analisis|data|laporan|metrik|chart|statistik/.test(t)
+  const isData = /analisis|data|laporan|metrik|chart|statistik|database|neon/.test(t)
   const isQa = /\b(test case|uji|qa|checklist)\b/.test(t)
   const isArch = /arsitektur|struktur|arsitek|scalable|modul/.test(t)
   const isExplore = /cari|telusuri|explore|bagaimana|dimana|repo/.test(t)
+  const fullAuto = /otomatis|full|semua agent|tanpa campur|selesaikan/.test(t) || powerMode
 
-  if (isArch) add('architect')
-  if (isExplore) add('researcher')
-  if (isBuild || isFix) add('coder')
-  if (isUi) add('designer')
-  if (isFix) add('debugger')
-  if (isReview) add('reviewer')
-  if (isSecure) add('security')
-  if (isDocs || isBuild) add('writer')
-  if (isDocs) add('docs')
-  if (isQa) add('qa')
-  if (isData) add('analyst')
-  if (isFix && powerMode) add('tracer')
-  if (powerMode && isBuild) add('simplifier')
-
-  if (!out.length) {
-    add('researcher')
-    add('analyst')
+  if (isBuild || fullAuto) {
+    add('planner')
+    add('coder')
+    add('designer')
+    if (isSecure || /login|auth|database/.test(t) || fullAuto) add('security')
+    if (fullAuto || powerMode) add('verifier')
+    if (isDocs || isBuild) add('writer')
+  } else {
+    if (isArch) add('architect')
+    if (isExplore) add('researcher')
+    if (isFix) {
+      add('debugger')
+      add('coder')
+    }
+    if (isUi) add('designer')
+    if (isReview) add('reviewer')
+    if (isSecure) add('security')
+    if (isDocs) add('writer')
+    if (isData) add('analyst')
+    if (isQa) add('qa')
   }
 
-  const max = powerMode ? 6 : 4
+  if (!out.length) add('coder')
+
+  const max = fullAuto || powerMode ? 6 : 4
   return out.slice(0, max)
 }
 
