@@ -11,8 +11,18 @@ export function wantsRepoCleanup(task: string): boolean {
 }
 
 export function isJunkPath(p: string): boolean {
-  const keep = new Set(['index.html', 'styles.css', 'app.js', 'README.md', '.gitignore'])
-  if (keep.has(p)) return false
+  const keepExact = new Set([
+    'index.html',
+    'styles.css',
+    'app.js',
+    'README.md',
+    '.gitignore',
+    'package.json',
+    'vercel.json',
+  ])
+  if (keepExact.has(p)) return false
+  if (p.startsWith('api/')) return false
+  if (p.startsWith('migrations/')) return false
   const base = p.split('/').pop() || ''
   if (/^output[-_]/i.test(base)) return true
   if (/\.(sh|dotenv)$/i.test(p)) return true
@@ -23,11 +33,11 @@ export function isJunkPath(p: string): boolean {
   if (p === 'main.py') return true
   if (p.startsWith('pages/') || p.startsWith('prisma/') || p.startsWith('components/')) return true
   if (p.startsWith('src/api/')) return true
+  if (p.startsWith('docs/')) return true
   if (p.length > 80) return true
   return false
 }
 
-/** Hapus file sampah di repo; return ringkasan */
 export async function cleanRepoJunk(
   cfg: GitHubConfig
 ): Promise<{ deleted: string[]; errors: string[]; total: number }> {
