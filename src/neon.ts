@@ -1,6 +1,4 @@
-/** Neon API — buat project Postgres + connection string */
-
-const NEON_API = 'https://console.neon.tech/api/v2'
+/** Neon API — buat project Postgres via proxy /api/neon (hindari CORS) */
 
 export type NeonProjectResult = {
   projectId: string
@@ -12,19 +10,11 @@ export type NeonProjectResult = {
   regionId: string
 }
 
-async function neonFetch(
-  apiKey: string,
-  path: string,
-  init?: RequestInit
-): Promise<{ ok: boolean; status: number; data: any }> {
-  const res = await fetch(`${NEON_API}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      ...(init?.headers || {}),
-    },
+async function neonProxy(body: Record<string, unknown>): Promise<{ ok: boolean; status: number; data: any }> {
+  const res = await fetch('/api/neon', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
   })
   let data: any = {}
   try {
@@ -51,33 +41,35 @@ export async function createNeonProject(
       .replace(/^-|-$/g, '')
       .slice(0, 60) || 'vo-db'
 
-  const body: any = {
-    project: {
+  let res: { ok: boolean; status: number; data: any }
+  try {
+    res = await neonProxy({
+      action: 'createProject',
+      apiKey: key,
       name,
-      region_id: opts.regionId || 'aws-ap-southeast-1',
-      pg_version: opts.pgVersion || 16,
-    },
+      regionId: opts.regionId || 'aws-ap-southeast-1',
+      pgVersion: opts.pgVersion || 16,
+      databaseName: opts.databaseName,
+    })
+  } catch (e: unknown) {
+    throw new Error(
+      'Gagal menghubungi proxy Neon (/api/neon): ' +
+        (e instanceof Error ? e.message : String(e)) +
+        '. Pastikan app di-deploy di Vercel (bukan file://) dan fungsi /api/neon aktif.'
+    )
   }
-  if (opts.databaseName) {
-    body.project.branch = {
-      database_name: opts.databaseName,
-      role_name: 'app_owner',
-    }
-  }
-
-  const res = await neonFetch(key, '/projects', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  })
 
   if (!res.ok) {
     const msg =
-      res.data?.message ||
       res.data?.error ||
+      res.data?.message ||
       (typeof res.data === 'string' ? res.data : null) ||
       `Neon ${res.status}`
     if (res.status === 401 || res.status === 403) {
-      throw new Error('Neon API key tidak valid / tidak berhak. Buat key di console.neon.tech → Account → API keys.')
+      throw new Error('Neon API key tidak valid. Buat key di console.neon.tech → Account → API keys.')
+    }
+    if (res.status === 404) {
+      throw new Error('Proxy /api/neon tidak ditemukan. Redeploy Virtual Office ke Vercel.')
     }
     throw new Error(String(msg).slice(0, 300))
   }
@@ -90,7 +82,7 @@ export async function createNeonProject(
     ''
 
   if (!uri) {
-    throw new Error('Project Neon dibuat tetapi connection URI tidak ada di respons. Cek di console.neon.tech.')
+    throw new Error('Project Neon dibuat tetapi connection URI tidak ada. Cek di console.neon.tech.')
   }
 
   const databases = res.data?.databases || []
@@ -114,10 +106,14 @@ export async function createNeonProject(
 }
 
 export async function listNeonProjects(apiKey: string): Promise<{ id: string; name: string }[]> {
-  const res = await neonFetch(apiKey.trim(), '/projects?limit=50')
-  if (!res.ok) return []
-  const list = res.data?.projects || []
-  return list.map((p: any) => ({ id: p.id, name: p.name }))
+  try {
+    const res = await neonProxy({ action: 'listProjects', apiKey: apiKey.trim() })
+    if (!res.ok) return []
+    const list = res.data?.projects || []
+    return list.map((p: any) => ({ id: p.id, name: p.name }))
+  } catch {
+    return []
+  }
 }
 
 export async function runNeonSql(connectionUri: string, sql: string): Promise<{ ok: boolean; detail: string }> {
@@ -144,10 +140,10 @@ export async function runNeonSql(connectionUri: string, sql: string): Promise<{ 
       return { ok: false, detail: `SQL HTTP ${res.status}: ${text.slice(0, 180)}` }
     }
     return { ok: true, detail: 'SQL dijalankan' }
-  } catch (e: unknown) {
+  } catch {
     return {
       ok: false,
-      detail: 'SQL tidak bisa dijalankan dari browser (CORS/network). Pakai file migrasi di repo.',
+      detail: 'SQL tidak bisa dijalankan dari browser. Pakai file migrasi di repo.',
     }
   }
 }
