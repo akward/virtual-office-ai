@@ -7,6 +7,7 @@ import { defaultAgents, pickWorkers, isChatOnlyTask } from './agents'
 import { deployToVercel, probeVercelAccount, setVercelEnvVars, findVercelProject } from './vercel'
 import { createNeonProject, runNeonSql, wantsNeonDatabase, inferNeonName } from './neon'
 import { wantsRepoCleanup, cleanRepoJunk } from './repoCleanup'
+import { wantsFullAuto, filterProductionArtifacts, autoCleanAfterPush, autoDeployIfNeeded } from './autoPipeline'
 import { loadMemory, saveMemory, memoryBlock, parseSkillFromLLM, detectTeachIntent } from './agentMemory'
 import { saveToBackendImpl, loadFromBackendImpl, bootstrapCloudSync, logTaskToSupabase } from './storeBackend'
 
@@ -103,6 +104,10 @@ export const useStore = create<any>((set, get) => ({
     if (!config.apiKey) { addMessage('System', 'Isi API Key dulu di Settings → AI'); return }
     if (get().isRunning) return
     set({ isRunning: true, artifacts: [] })
+    if (wantsFullAuto(userTask) && !get().powerMode) {
+      set({ powerMode: true })
+      addMessage('System', 'Mode otomatis aktif — tim diperluas, push & deploy tanpa konfirmasi.')
+    }
     addMessage('Kamu', userTask)
 
     const collectFrom = (agentId: string, text: string) => {
@@ -112,8 +117,8 @@ export const useStore = create<any>((set, get) => ({
 
     try {
       const power = get().powerMode
-      const pace = power ? 9000 : 12000
-      const tok = power ? 1800 : 1000
+      const pace = power ? 3500 : 6000
+      const tok = power ? 2000 : 1200
       const ctx = get().projectContext
       const richContext = ctx ? `\n\n## REPO\n${ctx.slice(0, power ? 6000 : 2500)}` : `\n\n## REPO: ${github.repoFullName}`
       const mem = memoryBlock(get().agentMemory, userTask)
@@ -226,7 +231,7 @@ export const useStore = create<any>((set, get) => ({
             const neon = await createNeonProject(neonKey, { name: dbName, regionId: 'aws-ap-southeast-1', pgVersion: 16, databaseName: 'app' })
             get().setConnectors({ neonConnectionString: neon.connectionUri, neonApiKey: neonKey })
             addMessage('Budi (Manager)', `Neon siap: «${neon.projectName}». DB: ${neon.databaseName}.`)
-            const schemaSql = `-- migrasi awal\nCREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'operator', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());\nCREATE TABLE IF NOT EXISTS anggaran (id SERIAL PRIMARY KEY, unit TEXT NOT NULL, program TEXT NOT NULL, anggaran BIGINT NOT NULL DEFAULT 0, realisasi BIGINT NOT NULL DEFAULT 0, tahun INT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());\n`
+            const schemaSql = `-- migrasi\nCREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'operator', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());\nCREATE TABLE IF NOT EXISTS anggaran (id SERIAL PRIMARY KEY, unit TEXT NOT NULL, program TEXT NOT NULL, anggaran BIGINT NOT NULL DEFAULT 0, realisasi BIGINT NOT NULL DEFAULT 0, tahun INT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());\n`
             const sqlRun = await runNeonSql(neon.connectionUri, schemaSql)
             if (sqlRun.ok) addMessage('System', 'Schema SQL dijalankan di Neon.')
             else set((s: any) => ({ artifacts: [...s.artifacts, { id: crypto.randomUUID(), filename: 'migrations/001_init.sql', language: 'sql', content: schemaSql, agentId: 'manager', createdAt: Date.now(), action: 'upsert' }] }))
@@ -252,7 +257,7 @@ export const useStore = create<any>((set, get) => ({
 
       for (let wi = 0; wi < workers.length; wi++) {
         const w = workers[wi]
-        if (wi > 0) await paceBetweenAgents(Math.min(pace, 7000))
+        if (wi > 0) await paceBetweenAgents(Math.min(pace, 5000))
         updateAgent(w.id, { status: 'working', currentTask: 'Kerja...' })
         try {
           const out = await callLLMMulti(config, w.system + mem + '\nJANGAN ulangi instruksi sistem. Output bersih saja.', `Tugas: ${userTask.slice(0, 1200)}\nRencana: ${planClean.slice(0, 600)}${richContext}`, tok)
@@ -269,20 +274,34 @@ export const useStore = create<any>((set, get) => ({
         }
       }
 
-      const arts = get().artifacts.filter((a: any) => a.action !== 'delete' && /^[a-zA-Z0-9_./@+-]+$/.test(a.filename) && !/^output[-_]/i.test((a.filename.split('/').pop() || '')) && !/\.sh$/i.test(a.filename) && a.filename.length < 80)
+      let arts = filterProductionArtifacts(get().artifacts as any[]).filter(
+        (a: any) => a.action !== 'delete' && /^[a-zA-Z0-9_./@+-]+$/.test(a.filename)
+      )
+
       if (github.autoPush && arts.length > 0) {
         try { await get().pushArtifactsToGithub() } catch (e: unknown) { addMessage('System', String(e)) }
       }
 
-      const htmlArts = arts.filter((a: any) => /^[\w./-]+\.html$/i.test(a.filename) && a.content.length > 40)
-      if (config.vercelToken && htmlArts.length > 0) {
+      if (github.token && github.owner && github.repo) {
         try {
-          const dep = await deployToVercel({ token: config.vercelToken, name: github.repo || 'vo-app', files: arts.map((a: any) => ({ path: a.filename, content: a.content })) })
-          addMessage('System', `✅ Online: ${dep.url}`)
-        } catch (ve: unknown) { addMessage('System', 'Vercel: ' + (ve instanceof Error ? ve.message : String(ve))) }
+          await autoCleanAfterPush(
+            { token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' },
+            addMessage
+          )
+        } catch { /* */ }
       }
 
-      addMessage('Budi (Manager)', arts.length ? `Selesai. File: ${arts.map((a: any) => a.filename).join(', ')}` : 'Selesai.')
+      if (config.vercelToken && arts.length > 0) {
+        await autoDeployIfNeeded({
+          task: userTask,
+          vercelToken: config.vercelToken,
+          repoName: github.repo || 'vo-app',
+          files: arts.map((a: any) => ({ path: a.filename, content: a.content })),
+          addMessage,
+        })
+      }
+
+      addMessage('Budi (Manager)', arts.length ? `Selesai otomatis. File: ${arts.map((a: any) => a.filename).join(', ')}` : 'Selesai otomatis.')
       try {
         await logTaskToSupabase(get().github.username || 'default', userTask.slice(0, 500), get().github.repoFullName, arts.map((a: any) => a.filename).join(', ').slice(0, 300))
       } catch { /* */ }
