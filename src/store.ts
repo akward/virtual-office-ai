@@ -6,6 +6,7 @@ import { defaultConnectors, saveConnectors, startGmailOAuth, handleGmailOAuthCal
 import { defaultAgents, pickWorkers, isChatOnlyTask } from './agents'
 import { deployToVercel, probeVercelAccount, setVercelEnvVars, findVercelProject } from './vercel'
 import { createNeonProject, runNeonSql, wantsNeonDatabase, inferNeonName } from './neon'
+import { wantsRepoCleanup, cleanRepoJunk } from './repoCleanup'
 import { loadMemory, saveMemory, memoryBlock, parseSkillFromLLM, detectTeachIntent } from './agentMemory'
 import { saveToBackendImpl, loadFromBackendImpl, bootstrapCloudSync, logTaskToSupabase } from './storeBackend'
 
@@ -177,6 +178,31 @@ export const useStore = create<any>((set, get) => ({
         return
       }
 
+      if (wantsRepoCleanup(userTask)) {
+        if (!github.token || !github.owner || !github.repo) {
+          addMessage('System', 'Pilih repo GitHub dulu, lalu ulangi perintah hapus sampah.')
+          updateAgent('manager', { status: 'done', currentTask: 'Selesai' })
+          return
+        }
+        updateAgent('manager', { status: 'working', currentTask: 'Bersihkan repo...' })
+        addMessage('System', 'Membersihkan file sampah di ' + (github.repoFullName || github.repo) + '...')
+        try {
+          const cfg: GitHubConfig = { token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' }
+          const result = await cleanRepoJunk(cfg)
+          if (!result.total) {
+            addMessage('Budi (Manager)', 'Repo sudah bersih. Tidak ada file sampah.')
+          } else {
+            addMessage('System', result.deleted.length ? 'Terhapus ' + result.deleted.length + ' file.' : 'Tidak ada yang terhapus.')
+            if (result.errors.length) addMessage('System', 'Gagal sebagian: ' + result.errors.slice(0, 5).join('; '))
+            addMessage('Budi (Manager)', 'Selesai bersihkan. Target: ' + result.total + ', terhapus: ' + result.deleted.length + '.')
+          }
+        } catch (e: unknown) {
+          addMessage('System', 'Bersih gagal: ' + (e instanceof Error ? e.message : String(e)))
+        }
+        updateAgent('manager', { status: 'done', currentTask: 'Selesai' })
+        return
+      }
+
       updateAgent('manager', { status: 'thinking', currentTask: 'Rencana...' })
       const planSystem = `Kamu Budi, PM. Buat rencana singkat (maks 5 baris): langkah + file target. Jangan echo instruksi. Jangan thinking process.\n${mem}`
       let plan: string
@@ -188,7 +214,6 @@ export const useStore = create<any>((set, get) => ({
       if (planClean) addMessage('Budi (Manager)', planClean)
       await paceBetweenAgents(pace)
 
-      // Neon: buat project DB + set DATABASE_URL ke Vercel
       if (wantsNeonDatabase(userTask)) {
         const neonKey = (get().connectors?.neonApiKey || '').trim()
         if (!neonKey) {
@@ -200,40 +225,20 @@ export const useStore = create<any>((set, get) => ({
             const dbName = inferNeonName(userTask, github.repo || 'vo-db')
             const neon = await createNeonProject(neonKey, { name: dbName, regionId: 'aws-ap-southeast-1', pgVersion: 16, databaseName: 'app' })
             get().setConnectors({ neonConnectionString: neon.connectionUri, neonApiKey: neonKey })
-            addMessage('Budi (Manager)', `Neon siap: «${neon.projectName}» (${neon.regionId || 'region'}). DB: ${neon.databaseName}. Connection string disimpan di Connectors.`)
-
-            const schemaSql = `-- migrasi awal ${neon.projectName}\nCREATE TABLE IF NOT EXISTS users (\n  id SERIAL PRIMARY KEY,\n  username TEXT UNIQUE NOT NULL,\n  password_hash TEXT NOT NULL,\n  role TEXT NOT NULL DEFAULT 'operator',\n  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\nCREATE TABLE IF NOT EXISTS anggaran (\n  id SERIAL PRIMARY KEY,\n  unit TEXT NOT NULL,\n  program TEXT NOT NULL,\n  anggaran BIGINT NOT NULL DEFAULT 0,\n  realisasi BIGINT NOT NULL DEFAULT 0,\n  tahun INT NOT NULL,\n  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\n`
-
+            addMessage('Budi (Manager)', `Neon siap: «${neon.projectName}». DB: ${neon.databaseName}.`)
+            const schemaSql = `-- migrasi awal\nCREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'operator', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());\nCREATE TABLE IF NOT EXISTS anggaran (id SERIAL PRIMARY KEY, unit TEXT NOT NULL, program TEXT NOT NULL, anggaran BIGINT NOT NULL DEFAULT 0, realisasi BIGINT NOT NULL DEFAULT 0, tahun INT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());\n`
             const sqlRun = await runNeonSql(neon.connectionUri, schemaSql)
-            if (sqlRun.ok) addMessage('System', '✅ Schema SQL dijalankan di Neon.')
-            else {
-              addMessage('System', `Schema disimpan ke file (SQL browser: ${sqlRun.detail})`)
-              set((s: any) => ({ artifacts: [...s.artifacts, { id: crypto.randomUUID(), filename: 'migrations/001_init.sql', language: 'sql', content: schemaSql, agentId: 'manager', createdAt: Date.now(), action: 'upsert' }] }))
-            }
-
+            if (sqlRun.ok) addMessage('System', 'Schema SQL dijalankan di Neon.')
+            else set((s: any) => ({ artifacts: [...s.artifacts, { id: crypto.randomUUID(), filename: 'migrations/001_init.sql', language: 'sql', content: schemaSql, agentId: 'manager', createdAt: Date.now(), action: 'upsert' }] }))
             if (config.vercelToken?.trim()) {
               const vName = github.repo || dbName
-              addMessage('System', `🔗 Menyambungkan DATABASE_URL ke Vercel project «${vName}»...`)
               try {
                 const found = await findVercelProject(config.vercelToken, vName)
-                const projectKey = found?.id || found?.name || vName
-                const envRes = await setVercelEnvVars({
-                  token: config.vercelToken,
-                  projectNameOrId: projectKey,
-                  teamId: found?.teamId,
-                  vars: [
-                    { key: 'DATABASE_URL', value: neon.connectionUri },
-                    { key: 'POSTGRES_URL', value: neon.connectionUri },
-                    { key: 'NEON_PROJECT_ID', value: neon.projectId },
-                  ],
-                })
-                addMessage('System', envRes.ok.length ? `✅ Vercel env: ${envRes.ok.join(', ')} (production+preview). Redeploy agar aktif.` : 'Vercel env gagal diset.')
-                if (envRes.errors.length) addMessage('System', 'Env partial: ' + envRes.errors.join('; '))
+                const envRes = await setVercelEnvVars({ token: config.vercelToken, projectNameOrId: found?.id || found?.name || vName, teamId: found?.teamId, vars: [{ key: 'DATABASE_URL', value: neon.connectionUri }, { key: 'POSTGRES_URL', value: neon.connectionUri }, { key: 'NEON_PROJECT_ID', value: neon.projectId }] })
+                addMessage('System', envRes.ok.length ? 'Vercel env: ' + envRes.ok.join(', ') : 'Vercel env gagal.')
               } catch (ve: unknown) {
-                addMessage('System', 'Vercel env gagal: ' + (ve instanceof Error ? ve.message : String(ve)) + ' — pastikan token Full Account dan project sudah ada di Vercel.')
+                addMessage('System', 'Vercel env gagal: ' + (ve instanceof Error ? ve.message : String(ve)))
               }
-            } else {
-              addMessage('System', 'Vercel token kosong — connection string hanya disimpan di Connectors Neon.')
             }
           } catch (ne: unknown) {
             addMessage('System', 'Neon gagal: ' + (ne instanceof Error ? ne.message : String(ne)))
@@ -256,10 +261,7 @@ export const useStore = create<any>((set, get) => ({
           const made = get().artifacts.slice(before)
           const names = made.map((a: any) => a.filename).filter(Boolean)
           if (names.length) addMessage(w.name, `✅ Siap: ${names.join(', ')}`)
-          else {
-            const brief = sanitizeAgentChat(out.text).slice(0, 160)
-            addMessage(w.name, brief || 'Selesai.')
-          }
+          else addMessage(w.name, sanitizeAgentChat(out.text).slice(0, 160) || 'Selesai.')
           updateAgent(w.id, { status: 'done', currentTask: 'Selesai', lastMessage: names[0] || 'ok' })
         } catch (e: unknown) {
           addMessage(w.name, 'Error: ' + (e instanceof Error ? e.message : String(e)))
@@ -267,7 +269,7 @@ export const useStore = create<any>((set, get) => ({
         }
       }
 
-      const arts = get().artifacts.filter((a: any) => a.action !== 'delete' && /^[a-zA-Z0-9_./@+-]+$/.test(a.filename))
+      const arts = get().artifacts.filter((a: any) => a.action !== 'delete' && /^[a-zA-Z0-9_./@+-]+$/.test(a.filename) && !/^output[-_]/i.test((a.filename.split('/').pop() || '')) && !/\.sh$/i.test(a.filename) && a.filename.length < 80)
       if (github.autoPush && arts.length > 0) {
         try { await get().pushArtifactsToGithub() } catch (e: unknown) { addMessage('System', String(e)) }
       }
