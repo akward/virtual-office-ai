@@ -2,7 +2,7 @@
 
 const NEON_API = 'https://console.neon.tech/api/v2'
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
@@ -33,12 +33,13 @@ module.exports = async function handler(req, res) {
 
   try {
     if (action === 'createProject') {
-      const name = String(body.name || 'vo-db')
+      const rawName = String(body.name || 'vo-db')
         .toLowerCase()
         .replace(/[^a-z0-9-]/g, '-')
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '')
-        .slice(0, 60) || 'vo-db'
+        .slice(0, 60)
+      const name = rawName || 'vo-db'
 
       const projectBody = {
         project: {
