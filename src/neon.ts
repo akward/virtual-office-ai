@@ -115,6 +115,32 @@ export async function listNeonProjects(apiKey: string): Promise<{ id: string; na
   }
 }
 
+/** Ambil connection string project lalu bisa disimpan ke Connectors */
+export async function fetchNeonConnectionUri(
+  apiKey: string,
+  opts?: { projectName?: string; projectId?: string; databaseName?: string }
+): Promise<{ connectionUri: string; projectId: string; projectName: string; databaseName: string }> {
+  const res = await neonProxy({
+    action: 'getConnectionUri',
+    apiKey: apiKey.trim(),
+    projectName: opts?.projectName,
+    projectId: opts?.projectId,
+    name: opts?.projectName,
+    databaseName: opts?.databaseName,
+  })
+  if (!res.ok) {
+    throw new Error(String(res.data?.error || res.data?.message || `Neon ${res.status}`).slice(0, 300))
+  }
+  const uri = res.data?.connectionUri || ''
+  if (!uri) throw new Error('Connection URI kosong')
+  return {
+    connectionUri: uri,
+    projectId: res.data.projectId || '',
+    projectName: res.data.projectName || opts?.projectName || '',
+    databaseName: res.data.databaseName || 'neondb',
+  }
+}
+
 export async function runNeonSql(
   connectionUri: string,
   sql: string
@@ -156,7 +182,6 @@ export async function runNeonSql(
   }
 }
 
-/** Daftar tabel public + ringkas row count */
 export async function listNeonTables(connectionUri: string): Promise<string> {
   const tables = await runNeonSql(
     connectionUri,
@@ -179,16 +204,34 @@ export function wantsNeonProbe(task: string): boolean {
   return /\bneon\b/.test(t) || (/\b(tabel|table|schema|database)\b/.test(t) && /\b(cek|lihat|list|ada)\b/.test(t))
 }
 
+/** User minta ambil/simpan connection string (bukan buat project baru) */
+export function wantsNeonConnectionString(task: string): boolean {
+  const t = task.toLowerCase()
+  return (
+    /neon\s*connection\s*string/i.test(t) ||
+    /connection\s*string.*neon/i.test(t) ||
+    /buat\s+neonconnectionstring/i.test(t) ||
+    (/\b(connection\s*string|neonconnectionstring)\b/.test(t) && /\b(buat|ambil|isi|simpan|generate|dapatkan)\b/.test(t))
+  )
+}
+
 export function wantsNeonDatabase(task: string): boolean {
   const t = task.toLowerCase()
-  return /\b(neon|postgres|postgresql|database|basis data|buat db|create database|skema|schema)\b/.test(t) &&
+  if (wantsNeonConnectionString(task)) return false
+  return (
+    /\b(neon|postgres|postgresql|database|basis data|buat db|create database|skema|schema)\b/.test(t) &&
     /\b(buat|bikin|create|migrasi|schema|integrasi|sambung)\b/.test(t)
+  )
 }
 
 export function inferNeonName(task: string, fallback: string): string {
   const m =
     task.match(/(?:neon|database|db|project)\s+(?:baru\s+)?[«"']?([a-zA-Z0-9_-]{2,40})/i) ||
+    task.match(/(?:untuk|for)\s+[«"']?([a-zA-Z0-9_-]{2,40})/i) ||
     task.match(/nama\s*[:=]\s*([a-zA-Z0-9_-]{2,40})/i)
-  if (m?.[1]) return m[1]
+  if (m?.[1] && !/connection|string|neon$/i.test(m[1])) return m[1]
+  // "untuk neon" → project name "neon"
+  const m2 = task.match(/\buntuk\s+([a-zA-Z0-9_-]{2,40})\b/i)
+  if (m2?.[1] && !/connection|string/i.test(m2[1])) return m2[1]
   return (fallback || 'vo-db').slice(0, 40)
 }
