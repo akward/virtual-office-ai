@@ -25,7 +25,7 @@ export default async function handler(req, res) {
   body = body || {}
 
   const apiKey = String(body.apiKey || '').trim()
-  if (!apiKey) {
+  if (!apiKey && body.action !== 'runSql') {
     return res.status(400).json({ error: 'apiKey required' })
   }
 
