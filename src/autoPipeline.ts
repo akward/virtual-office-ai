@@ -4,6 +4,7 @@ import { cleanRepoJunk, isJunkPath } from './repoCleanup'
 import type { GitHubConfig } from './github'
 import { listRepoFiles } from './github'
 import { deployToVercel } from './vercel'
+import { openPreviewBrowser, verifyLiveUrl, formatVerifyReport, type VerifyResult } from './verifyDeploy'
 
 export function wantsFullAuto(task: string): boolean {
   const t = task.toLowerCase()
@@ -64,11 +65,15 @@ export async function autoDeployIfNeeded(opts: {
   repoName?: string
   files: { path: string; content: string }[]
   addMessage: (from: string, text: string) => void
-}): Promise<string | null> {
-  if (!opts.vercelToken?.trim()) return null
-  if (!shouldAutoDeploy(opts.task)) return null
+  openBrowser?: boolean
+  verify?: boolean
+}): Promise<{ url: string | null; verify: VerifyResult | null }> {
+  if (!opts.vercelToken?.trim()) return { url: null, verify: null }
+  if (!shouldAutoDeploy(opts.task)) return { url: null, verify: null }
   const files = opts.files.filter((f) => f.content && f.path)
-  if (!files.length) return null
+  if (!files.length) return { url: null, verify: null }
+
+  let url: string | null = null
   try {
     opts.addMessage('System', 'Auto-deploy ke Vercel...')
     const dep = await deployToVercel({
@@ -76,10 +81,26 @@ export async function autoDeployIfNeeded(opts: {
       name: opts.repoName || 'vo-app',
       files,
     })
-    opts.addMessage('System', `Online: ${dep.url}`)
-    return dep.url
+    url = dep.url
+    opts.addMessage('System', `Online: ${url}`)
   } catch (e: unknown) {
     opts.addMessage('System', 'Auto-deploy: ' + (e instanceof Error ? e.message : String(e)))
-    return null
+    return { url: null, verify: null }
   }
+
+  if (opts.openBrowser !== false && url) {
+    opts.addMessage('System', '🌐 Membuka browser untuk cek hasil...')
+    openPreviewBrowser(url)
+  }
+
+  let verify: VerifyResult | null = null
+  if (opts.verify !== false && url) {
+    // beri waktu deploy settle
+    await new Promise((r) => setTimeout(r, 2500))
+    opts.addMessage('System', '🔍 Memverifikasi halaman live...')
+    verify = await verifyLiveUrl(url)
+    opts.addMessage('System', formatVerifyReport(verify))
+  }
+
+  return { url, verify }
 }
