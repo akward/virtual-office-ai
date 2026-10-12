@@ -5,7 +5,7 @@ import { getAuthenticatedUser, listAllRepos, loadProjectContext, pushMany, creat
 import { defaultConnectors, saveConnectors, startGmailOAuth, handleGmailOAuthCallback, type ConnectorConfig } from './connectors'
 import { defaultAgents, pickWorkers, isChatOnlyTask } from './agents'
 import { deployToVercel, probeVercelAccount, setVercelEnvVars, findVercelProject } from './vercel'
-import { createNeonProject, runNeonSql, wantsNeonDatabase, inferNeonName, listNeonTables, listNeonProjects, wantsNeonProbe } from './neon'
+import { createNeonProject, runNeonSql, wantsNeonDatabase, inferNeonName, listNeonTables, listNeonProjects, wantsNeonProbe, wantsNeonConnectionString, fetchNeonConnectionUri } from './neon'
 import { wantsRepoCleanup, cleanRepoJunk } from './repoCleanup'
 import { wantsFullAuto, filterProductionArtifacts, autoCleanAfterPush, autoDeployIfNeeded } from './autoPipeline'
 import { loadMemory, saveMemory, memoryBlock, parseSkillFromLLM, detectTeachIntent } from './agentMemory'
@@ -101,9 +101,33 @@ export const useStore = create<any>((set, get) => ({
 
   runTask: async (userTask: string) => {
     const { config, github, addMessage, updateAgent } = get()
-    if (!config.apiKey) { addMessage('System', 'Isi API Key dulu di Settings → AI'); return }
     if (get().isRunning) return
     set({ isRunning: true, artifacts: [] })
+
+    if (wantsNeonConnectionString(userTask)) {
+      addMessage('Kamu', userTask)
+      const key = (get().connectors?.neonApiKey || '').trim()
+      if (!key) {
+        addMessage('System', 'Isi Neon API key dulu di Connectors → Neon.')
+        set({ isRunning: false })
+        return
+      }
+      const name = inferNeonName(userTask, 'neon')
+      addMessage('System', `Mengambil connection string Neon untuk «${name}»...`)
+      try {
+        const got = await fetchNeonConnectionUri(key, { projectName: name })
+        get().setConnectors({ neonConnectionString: got.connectionUri, neonApiKey: key })
+        try { await get().saveToBackend({ includeGithubToken: true }) } catch { /* */ }
+        addMessage('Budi (Manager)', `Connection string tersimpan untuk project «${got.projectName || name}» (DB: ${got.databaseName}). Agent siap query tabel.`)
+        addMessage('System', 'Tersimpan di Connectors + cloud. URI tidak ditampilkan penuh di chat (aman).')
+      } catch (e: unknown) {
+        addMessage('System', 'Gagal ambil connection string: ' + (e instanceof Error ? e.message : String(e)))
+      }
+      set({ isRunning: false })
+      return
+    }
+
+    if (!config.apiKey) { addMessage('System', 'Isi API Key dulu di Settings → AI'); return }
     if (wantsFullAuto(userTask) && !get().powerMode) {
       set({ powerMode: true })
       addMessage('System', 'Mode otomatis aktif — tim diperluas, push & deploy tanpa konfirmasi.')
@@ -165,10 +189,10 @@ export const useStore = create<any>((set, get) => ({
           } else if (key) {
             const projs = await listNeonProjects(key)
             neonProbe = projs.length
-              ? 'Project Neon: ' + projs.map((p) => p.name).join(', ') + '. Connection string belum disimpan di Connectors — isi neonConnectionString untuk daftar tabel.'
+              ? 'Project Neon: ' + projs.map((p) => p.name).join(', ') + '. Connection string belum di Connectors. Ketik: buat neonConnectionString untuk <nama-project>'
               : 'Neon API key terisi tetapi tidak ada project.'
           } else {
-            neonProbe = 'Neon belum di Connectors (API key / connection string). Vercel realisasi-anggaran punya DATABASE_URL Neon, salin ke Connectors agar agent bisa list tabel.'
+            neonProbe = 'Neon belum di Connectors (API key / connection string).'
           }
         } catch (e: unknown) {
           neonProbe = 'Neon probe gagal: ' + (e instanceof Error ? e.message : String(e))
