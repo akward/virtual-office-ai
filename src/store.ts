@@ -8,6 +8,7 @@ import { deployToVercel, probeVercelAccount, setVercelEnvVars, findVercelProject
 import { createNeonProject, runNeonSql, wantsNeonDatabase, inferNeonName, listNeonTables, listNeonProjects, wantsNeonProbe, wantsNeonConnectionString, fetchNeonConnectionUri } from './neon'
 import { wantsRepoCleanup, cleanRepoJunk } from './repoCleanup'
 import { wantsFullAuto, filterProductionArtifacts, autoCleanAfterPush, autoDeployIfNeeded } from './autoPipeline'
+import { buildHealPrompt, openPreviewBrowser, verifyLiveUrl, formatVerifyReport } from './verifyDeploy'
 import { loadMemory, saveMemory, memoryBlock, parseSkillFromLLM, detectTeachIntent } from './agentMemory'
 import { saveToBackendImpl, loadFromBackendImpl, bootstrapCloudSync, logTaskToSupabase } from './storeBackend'
 
@@ -127,7 +128,7 @@ export const useStore = create<any>((set, get) => ({
       return
     }
 
-    if (!config.apiKey) { addMessage('System', 'Isi API Key dulu di Settings → AI'); return }
+    if (!config.apiKey) { addMessage('System', 'Isi API Key dulu di Settings → AI'); set({ isRunning: false }); return }
     if (wantsFullAuto(userTask) && !get().powerMode) {
       set({ powerMode: true })
       addMessage('System', 'Mode otomatis aktif — tim diperluas, push & deploy tanpa konfirmasi.')
@@ -337,17 +338,75 @@ export const useStore = create<any>((set, get) => ({
         } catch { /* */ }
       }
 
+      let liveUrl: string | null = null
+      let lastVerify: any = null
       if (config.vercelToken && arts.length > 0) {
-        await autoDeployIfNeeded({
+        const dep = await autoDeployIfNeeded({
           task: userTask,
           vercelToken: config.vercelToken,
           repoName: github.repo || 'vo-app',
           files: arts.map((a: any) => ({ path: a.filename, content: a.content })),
           addMessage,
+          openBrowser: true,
+          verify: true,
         })
+        liveUrl = dep.url
+        lastVerify = dep.verify
       }
 
-      addMessage('Budi (Manager)', arts.length ? `Selesai otomatis. File: ${arts.map((a: any) => a.filename).join(', ')}` : 'Selesai otomatis.')
+      for (let heal = 0; heal < 2 && lastVerify && !lastVerify.ok && config.apiKey; heal++) {
+        addMessage('System', `🛠️ Auto-perbaikan putaran ${heal + 1}/2 (tanpa diminta)...`)
+        updateAgent('coder', { status: 'working', currentTask: 'Perbaiki live error...' })
+        const healPrompt = buildHealPrompt(userTask, lastVerify, arts.map((a: any) => a.filename))
+        try {
+          const coder = get().agents.find((a: Agent) => a.id === 'coder') || get().agents.find((a: Agent) => a.name === 'Andi')
+          const sys = (coder?.system || 'Kamu coder. Perbaiki bug. Output file lengkap saja.') + memoryBlock(get().agentMemory, userTask)
+          const out = await callLLMMulti(config, sys, healPrompt + (get().projectContext ? '\n\n## REPO\n' + get().projectContext.slice(0, 3000) : ''), 2000)
+          const before = get().artifacts.length
+          collectFrom(coder?.id || 'coder', out.text)
+          const fixed = filterProductionArtifacts(get().artifacts.slice(before) as any[]).filter(
+            (a: any) => a.action !== 'delete' && /^[a-zA-Z0-9_./@+-]+$/.test(a.filename)
+          )
+          if (!fixed.length) {
+            addMessage('System', 'Auto-perbaikan: tidak ada file baru dari agent.')
+            break
+          }
+          const map = new Map(arts.map((a: any) => [a.filename, a]))
+          for (const f of fixed) map.set(f.filename, f)
+          arts = Array.from(map.values())
+          set({ artifacts: arts })
+          if (github.autoPush) {
+            try { await get().pushArtifactsToGithub() } catch (e: unknown) { addMessage('System', String(e)) }
+          }
+          if (config.vercelToken) {
+            const dep2 = await autoDeployIfNeeded({
+              task: userTask + ' deploy',
+              vercelToken: config.vercelToken,
+              repoName: github.repo || 'vo-app',
+              files: arts.map((a: any) => ({ path: a.filename, content: a.content })),
+              addMessage,
+              openBrowser: true,
+              verify: true,
+            })
+            liveUrl = dep2.url || liveUrl
+            lastVerify = dep2.verify
+          }
+          updateAgent('coder', { status: 'done', currentTask: 'Selesai' })
+        } catch (e: unknown) {
+          addMessage('System', 'Auto-perbaikan gagal: ' + (e instanceof Error ? e.message : String(e)))
+          updateAgent('coder', { status: 'error', currentTask: 'Gagal' })
+          break
+        }
+      }
+
+      if (lastVerify?.ok) {
+        addMessage('Budi (Manager)', `Siap pakai${liveUrl ? ': ' + liveUrl : ''}. Verifikasi live OK.`)
+      } else if (liveUrl) {
+        addMessage('Budi (Manager)', `Deploy ada di ${liveUrl}, masih ada catatan: ${(lastVerify?.issues || []).join('; ') || 'cek manual'}. File: ${arts.map((a: any) => a.filename).join(', ')}`)
+      } else {
+        addMessage('Budi (Manager)', arts.length ? `Selesai. File: ${arts.map((a: any) => a.filename).join(', ')}` : 'Selesai.')
+      }
+
       try {
         await logTaskToSupabase(get().github.username || 'default', userTask.slice(0, 500), get().github.repoFullName, arts.map((a: any) => a.filename).join(', ').slice(0, 300))
       } catch { /* */ }
