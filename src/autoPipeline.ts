@@ -95,8 +95,8 @@ export async function autoDeployIfNeeded(opts: {
 
   let verify: VerifyResult | null = null
   if (opts.verify !== false && url) {
-    // beri waktu deploy settle
-    await new Promise((r) => setTimeout(r, 2500))
+    // tunggu CDN + READY settle
+    await new Promise((r) => setTimeout(r, 5000))
     opts.addMessage('System', '🔍 Memverifikasi halaman live...')
     verify = await verifyLiveUrl(url)
     opts.addMessage('System', formatVerifyReport(verify))
