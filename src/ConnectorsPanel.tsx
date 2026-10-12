@@ -1,4 +1,4 @@
-/** Panel Connectors — sederhana seperti Grok / ChatGPT */
+/** Panel Connectors — isi API sekali, agent yang kerjakan */
 import { useState, type ReactNode } from 'react'
 import { useStore } from './store'
 import {
@@ -79,7 +79,7 @@ export function ConnectorsPanel() {
   }
   const saveCloud = () => saveToBackend({ includeGithubToken: true }).catch(() => {})
 
-  // Token dari cloud = Connected (tidak wajib klik Connect lagi)
+  const aiOk = Boolean(config.apiKey?.trim())
   const ghOk = Boolean(github.token?.trim() && (github.connected || github.username))
   const vercelOk = Boolean(config.vercelToken?.trim())
   const sbOk = isSupabaseConfigured()
@@ -92,11 +92,38 @@ export function ConnectorsPanel() {
   const discordOk = Boolean(connectors.discordWebhookUrl)
   const hookOk = Boolean(connectors.genericWebhookUrl)
 
+  const coreReady = aiOk && ghOk
+  const fullReady = coreReady && vercelOk && neonOk
+
   const sbLabel = loadSbProfiles().find((p) => p.id === getActiveSbId())?.label
   const vbLabel = loadVercelProfiles().find((p) => p.id === getActiveVercelId())?.label
 
   return (
     <div className="conn-grid">
+      <div className="conn-banner" style={{
+        gridColumn: '1 / -1',
+        padding: '0.85rem 1rem',
+        borderRadius: 10,
+        background: fullReady ? 'rgba(34,197,94,0.12)' : coreReady ? 'rgba(234,179,8,0.12)' : 'rgba(99,102,241,0.12)',
+        border: '1px solid rgba(148,163,184,0.25)',
+        fontSize: '0.9rem',
+        lineHeight: 1.45,
+      }}>
+        <strong>Mode API-only</strong>
+        <div style={{ marginTop: 4, opacity: 0.95 }}>
+          Anda cukup mengisi key di bawah. Agent (Budi, Andi, Luna, dll.) yang menulis kode, push GitHub, buat DB Neon, dan deploy Vercel.
+        </div>
+        <div style={{ marginTop: 8, fontSize: '0.85rem', opacity: 0.9 }}>
+          Wajib: <b>AI</b> {aiOk ? '✓' : '○'} · <b>GitHub</b> {ghOk ? '✓' : '○'}
+          {' · '}Disarankan: <b>Vercel</b> {vercelOk ? '✓' : '○'} · <b>Neon</b> {neonOk ? '✓' : '○'} · <b>Supabase</b> {sbOk ? '✓' : '○'}
+        </div>
+        {coreReady && (
+          <div style={{ marginTop: 6, fontSize: '0.85rem' }}>
+            Siap menerima tugas. Contoh: «buat dashboard realisasi anggaran + database neon + deploy vercel»
+          </div>
+        )}
+      </div>
+
       <Card icon="🐙" title="GitHub" subtitle={ghOk ? `@${github.username}` : 'Repos & code'} status={ghOk ? 'connected' : github.token ? 'partial' : 'disconnected'} open={openId === 'github'} onToggle={() => toggle('github')}>
         <Field label="Token" value={github.token} onChange={(v) => setGithub({ token: v })} placeholder="ghp_..." password />
         <div className="row-actions">
