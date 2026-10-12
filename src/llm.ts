@@ -51,13 +51,19 @@ export async function callLLM(
     }
     const err = await res.text()
     lastErr = err.slice(0, 250)
-    if (res.status === 429) {
-      const wait = parseRetryMs(err, attempt)
+    if (res.status === 429 || res.status === 503 || /UNAVAILABLE|high demand|overloaded|capacity/i.test(err)) {
+      const wait = res.status === 503
+        ? Math.min(45000, 4000 * (attempt + 1) + Math.floor(Math.random() * 1500))
+        : parseRetryMs(err, attempt)
       if (attempt < maxAttempts - 1) {
         await sleep(wait)
         continue
       }
-      throw new Error(`Rate limit. Sudah dicoba ${maxAttempts}x. Detail: ${lastErr}`)
+      throw new Error(
+        res.status === 503
+          ? `Model sibuk (503). Coba lagi atau ganti model/API #2. Detail: ${lastErr}`
+          : `Rate limit. Sudah dicoba ${maxAttempts}x. Detail: ${lastErr}`
+      )
     }
     throw new Error(`LLM Error ${res.status}: ${lastErr}`)
   }
@@ -247,17 +253,46 @@ export async function callLLMMulti(
     if (extra?.apiKey) keys.push({ apiKey: extra.apiKey, baseUrl: extra.baseUrl || config.baseUrl, model: extra.model || config.model })
   }
   if (!keys.length) throw new Error('API Key belum diisi')
+
+  const expand = (k: { apiKey: string; baseUrl: string; model: string }) => {
+    const list = [k]
+    const m = (k.model || '').toLowerCase()
+    const b = (k.baseUrl || '').toLowerCase()
+    if (b.includes('generativelanguage.googleapis') || m.includes('gemini')) {
+      for (const alt of ['gemini-2.0-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash']) {
+        if (alt !== k.model) list.push({ ...k, model: alt })
+      }
+    }
+    if (b.includes('openrouter')) {
+      for (const alt of ['google/gemini-2.0-flash-001', 'openai/gpt-4o-mini', 'meta-llama/llama-3.3-70b-instruct']) {
+        if (alt !== k.model) list.push({ ...k, model: alt })
+      }
+    }
+    if (b.includes('groq')) {
+      for (const alt of ['llama-3.1-8b-instant', 'gemma2-9b-it', 'llama-3.3-70b-versatile']) {
+        if (alt !== k.model) list.push({ ...k, model: alt })
+      }
+    }
+    return list
+  }
+
+  const queue = keys.flatMap(expand)
   let lastError = ''
-  for (const k of keys) {
+  for (const k of queue) {
     try {
-      const text = await callLLM({ ...config, apiKey: k.apiKey, baseUrl: k.baseUrl, model: k.model }, systemPrompt, userMessage, maxTokens)
+      const text = await callLLM(
+        { ...config, apiKey: k.apiKey, baseUrl: k.baseUrl, model: k.model },
+        systemPrompt,
+        userMessage,
+        maxTokens
+      )
       return { text, model: k.model }
     } catch (e: unknown) {
       lastError = e instanceof Error ? e.message : String(e)
-      if (/429|rate limit/i.test(lastError)) continue
-      if (/401|403|invalid.*key/i.test(lastError) && keys.length > 1) continue
-      if (keys.length === 1) throw e
+      if (/429|rate limit|503|UNAVAILABLE|high demand|sibuk|overloaded/i.test(lastError)) continue
+      if (/401|403|invalid.*key|model.*not.*found|404/i.test(lastError)) continue
+      if (queue.length === 1) throw e
     }
   }
-  throw new Error(lastError || 'Semua API gagal')
+  throw new Error(lastError || 'Semua API/model gagal. Isi API #2 di Settings atau coba lagi nanti.')
 }
