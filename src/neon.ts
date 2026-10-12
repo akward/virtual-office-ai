@@ -25,7 +25,6 @@ async function neonProxy(body: Record<string, unknown>): Promise<{ ok: boolean; 
   return { ok: res.ok, status: res.status, data }
 }
 
-/** Buat project Neon baru; mengembalikan connection URI siap pakai */
 export async function createNeonProject(
   apiKey: string,
   opts: { name: string; regionId?: string; pgVersion?: number; databaseName?: string }
@@ -116,7 +115,10 @@ export async function listNeonProjects(apiKey: string): Promise<{ id: string; na
   }
 }
 
-export async function runNeonSql(connectionUri: string, sql: string): Promise<{ ok: boolean; detail: string }> {
+export async function runNeonSql(
+  connectionUri: string,
+  sql: string
+): Promise<{ ok: boolean; detail: string; rows?: any[] }> {
   if (!connectionUri?.trim() || !sql?.trim()) {
     return { ok: false, detail: 'URI atau SQL kosong' }
   }
@@ -139,7 +141,13 @@ export async function runNeonSql(connectionUri: string, sql: string): Promise<{ 
     if (!res.ok) {
       return { ok: false, detail: `SQL HTTP ${res.status}: ${text.slice(0, 180)}` }
     }
-    return { ok: true, detail: 'SQL dijalankan' }
+    let parsed: any = {}
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      return { ok: true, detail: 'SQL dijalankan' }
+    }
+    return { ok: true, detail: 'SQL dijalankan', rows: parsed.rows || [] }
   } catch {
     return {
       ok: false,
@@ -148,9 +156,33 @@ export async function runNeonSql(connectionUri: string, sql: string): Promise<{ 
   }
 }
 
+/** Daftar tabel public + ringkas row count */
+export async function listNeonTables(connectionUri: string): Promise<string> {
+  const tables = await runNeonSql(
+    connectionUri,
+    "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name"
+  )
+  if (!tables.ok) return 'Neon SQL gagal: ' + tables.detail
+  const names = (tables.rows || []).map((r: any) => r.table_name).filter(Boolean)
+  if (!names.length) return 'Neon terhubung, database kosong (0 tabel di schema public).'
+  const counts: string[] = []
+  for (const n of names.slice(0, 20)) {
+    const c = await runNeonSql(connectionUri, `SELECT COUNT(*)::int AS c FROM "${String(n).replace(/"/g, '')}"`)
+    const num = c.ok && c.rows?.[0]?.c != null ? String(c.rows[0].c) : '?'
+    counts.push(`${n} (${num} baris)`)
+  }
+  return 'Tabel Neon (public): ' + counts.join(', ')
+}
+
+export function wantsNeonProbe(task: string): boolean {
+  const t = task.toLowerCase()
+  return /\bneon\b/.test(t) || (/\b(tabel|table|schema|database)\b/.test(t) && /\b(cek|lihat|list|ada)\b/.test(t))
+}
+
 export function wantsNeonDatabase(task: string): boolean {
   const t = task.toLowerCase()
-  return /\b(neon|postgres|postgresql|database|basis data|buat db|create database|skema|schema)\b/.test(t)
+  return /\b(neon|postgres|postgresql|database|basis data|buat db|create database|skema|schema)\b/.test(t) &&
+    /\b(buat|bikin|create|migrasi|schema|integrasi|sambung)\b/.test(t)
 }
 
 export function inferNeonName(task: string, fallback: string): string {
