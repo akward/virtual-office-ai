@@ -2,6 +2,17 @@
 
 const NEON_API = 'https://console.neon.tech/api/v2'
 
+async function neonGet(path, apiKey) {
+  const r = await fetch(`${NEON_API}${path}`, {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: 'application/json',
+    },
+  })
+  const data = await r.json().catch(() => ({}))
+  return { ok: r.ok, status: r.status, data }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
@@ -25,7 +36,7 @@ export default async function handler(req, res) {
   body = body || {}
 
   const apiKey = String(body.apiKey || '').trim()
-  if (!apiKey && body.action !== 'runSql') {
+  if (!apiKey) {
     return res.status(400).json({ error: 'apiKey required' })
   }
 
@@ -75,19 +86,117 @@ export default async function handler(req, res) {
     }
 
     if (action === 'listProjects') {
-      const r = await fetch(`${NEON_API}/projects?limit=50`, {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          Accept: 'application/json',
-        },
-      })
-      const data = await r.json().catch(() => ({}))
+      const r = await neonGet('/projects?limit=50', apiKey)
       if (!r.ok) {
         return res.status(r.status).json({
-          error: data.message || data.error || `Neon ${r.status}`,
+          error: r.data.message || r.data.error || `Neon ${r.status}`,
         })
       }
-      return res.status(200).json(data)
+      return res.status(200).json(r.data)
+    }
+
+    /** Ambil connection string project (by id atau name) */
+    if (action === 'getConnectionUri') {
+      let projectId = String(body.projectId || '').trim()
+      const projectName = String(body.projectName || body.name || '').trim().toLowerCase()
+
+      if (!projectId) {
+        const list = await neonGet('/projects?limit=50', apiKey)
+        if (!list.ok) {
+          return res.status(list.status).json({
+            error: list.data.message || list.data.error || 'Gagal list project',
+          })
+        }
+        const projects = list.data.projects || []
+        const found = projectName
+          ? projects.find((p) => String(p.name || '').toLowerCase() === projectName) ||
+            projects.find((p) => String(p.name || '').toLowerCase().includes(projectName))
+          : projects[0]
+        if (!found) {
+          return res.status(404).json({
+            error: projectName
+              ? `Project «${projectName}» tidak ditemukan`
+              : 'Tidak ada project Neon',
+            projects: projects.map((p) => ({ id: p.id, name: p.name })),
+          })
+        }
+        projectId = found.id
+      }
+
+      const branches = await neonGet(`/projects/${projectId}/branches`, apiKey)
+      if (!branches.ok) {
+        return res.status(branches.status).json({
+          error: branches.data.message || 'Gagal ambil branches',
+        })
+      }
+      const branchList = branches.data.branches || []
+      const branch =
+        branchList.find((b) => b.default || b.primary) || branchList[0]
+      if (!branch) {
+        return res.status(404).json({ error: 'Branch tidak ditemukan' })
+      }
+
+      const dbs = await neonGet(
+        `/projects/${projectId}/branches/${branch.id}/databases`,
+        apiKey
+      )
+      const roles = await neonGet(
+        `/projects/${projectId}/branches/${branch.id}/roles`,
+        apiKey
+      )
+      const dbName =
+        body.databaseName ||
+        (dbs.data.databases && dbs.data.databases[0] && dbs.data.databases[0].name) ||
+        'neondb'
+      const roleName =
+        body.roleName ||
+        (roles.data.roles && roles.data.roles[0] && roles.data.roles[0].name) ||
+        'neondb_owner'
+
+      const q = new URLSearchParams({
+        database_name: dbName,
+        role_name: roleName,
+      })
+      if (branch.id) q.set('branch_id', branch.id)
+
+      const uriRes = await neonGet(
+        `/projects/${projectId}/connection_uri?${q.toString()}`,
+        apiKey
+      )
+      if (!uriRes.ok) {
+        return res.status(uriRes.status).json({
+          error:
+            uriRes.data.message ||
+            uriRes.data.error ||
+            `Gagal ambil connection URI (${uriRes.status})`,
+          detail: uriRes.data,
+        })
+      }
+
+      const connectionUri =
+        uriRes.data.uri ||
+        uriRes.data.connection_uri ||
+        (uriRes.data.connection_uris &&
+          uriRes.data.connection_uris[0] &&
+          uriRes.data.connection_uris[0].connection_uri) ||
+        ''
+
+      if (!connectionUri) {
+        return res.status(500).json({
+          error: 'URI kosong dari Neon API',
+          detail: uriRes.data,
+        })
+      }
+
+      return res.status(200).json({
+        projectId,
+        projectName: body.projectName || projectName || projectId,
+        branchId: branch.id,
+        branchName: branch.name,
+        databaseName: dbName,
+        roleName,
+        connectionUri,
+      })
     }
 
     return res.status(400).json({ error: 'Unknown action: ' + action })
