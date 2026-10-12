@@ -1,4 +1,4 @@
-/** Vercel serverless — proxy Neon API (hindari CORS dari browser) */
+/** Vercel serverless — proxy Neon API + SQL (hindari CORS dari browser) */
 
 const NEON_API = 'https://console.neon.tech/api/v2'
 
@@ -35,12 +35,56 @@ export default async function handler(req, res) {
   }
   body = body || {}
 
+  const action = body.action || 'createProject'
+
+  // SQL tidak butuh Neon API key — cukup connection string
+  if (action === 'runSql') {
+    const connectionUri = String(body.connectionUri || body.uri || '').trim()
+    const sql = String(body.sql || body.query || '').trim()
+    if (!connectionUri || !sql) {
+      return res.status(400).json({ error: 'connectionUri dan sql wajib' })
+    }
+    let host = ''
+    try {
+      host = new URL(connectionUri.replace(/^postgres(ql)?:/, 'https:')).hostname
+    } catch {
+      return res.status(400).json({ error: 'Connection URI tidak valid' })
+    }
+    try {
+      const r = await fetch(`https://${host}/sql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'Neon-Connection-String': connectionUri,
+        },
+        body: JSON.stringify({ query: sql, params: body.params || [] }),
+      })
+      const text = await r.text()
+      let data = {}
+      try {
+        data = JSON.parse(text)
+      } catch {
+        data = { raw: text.slice(0, 500) }
+      }
+      if (!r.ok) {
+        return res.status(r.status).json({
+          error: data.message || data.error || `SQL HTTP ${r.status}`,
+          detail: data,
+        })
+      }
+      return res.status(200).json(data)
+    } catch (e) {
+      return res.status(500).json({
+        error: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
+
   const apiKey = String(body.apiKey || '').trim()
   if (!apiKey) {
     return res.status(400).json({ error: 'apiKey required' })
   }
-
-  const action = body.action || 'createProject'
 
   try {
     if (action === 'createProject') {
@@ -95,7 +139,6 @@ export default async function handler(req, res) {
       return res.status(200).json(r.data)
     }
 
-    /** Ambil connection string project (by id atau name) */
     if (action === 'getConnectionUri') {
       let projectId = String(body.projectId || '').trim()
       const projectName = String(body.projectName || body.name || '').trim().toLowerCase()
