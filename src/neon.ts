@@ -1,4 +1,4 @@
-/** Neon API — buat project Postgres via proxy /api/neon (hindari CORS) */
+/** Neon API — project + SQL via proxy /api/neon (hindari CORS) */
 
 export type NeonProjectResult = {
   projectId: string
@@ -54,7 +54,7 @@ export async function createNeonProject(
     throw new Error(
       'Gagal menghubungi proxy Neon (/api/neon): ' +
         (e instanceof Error ? e.message : String(e)) +
-        '. Pastikan app di-deploy di Vercel (bukan file://) dan fungsi /api/neon aktif.'
+        '. Pastikan app di-deploy di Vercel dan fungsi /api/neon aktif.'
     )
   }
 
@@ -115,7 +115,6 @@ export async function listNeonProjects(apiKey: string): Promise<{ id: string; na
   }
 }
 
-/** Ambil connection string project lalu bisa disimpan ke Connectors */
 export async function fetchNeonConnectionUri(
   apiKey: string,
   opts?: { projectName?: string; projectId?: string; databaseName?: string }
@@ -141,6 +140,7 @@ export async function fetchNeonConnectionUri(
   }
 }
 
+/** SQL lewat proxy serverless — tidak kena CORS browser */
 export async function runNeonSql(
   connectionUri: string,
   sql: string
@@ -149,35 +149,26 @@ export async function runNeonSql(
     return { ok: false, detail: 'URI atau SQL kosong' }
   }
   try {
-    let host = ''
-    try {
-      host = new URL(connectionUri.replace(/^postgres(ql)?:/, 'https:')).hostname
-    } catch {
-      return { ok: false, detail: 'Connection URI tidak valid' }
-    }
-    const res = await fetch(`https://${host}/sql`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Neon-Connection-String': connectionUri,
-      },
-      body: JSON.stringify({ query: sql, params: [] }),
+    const res = await neonProxy({
+      action: 'runSql',
+      connectionUri: connectionUri.trim(),
+      sql: sql.trim(),
     })
-    const text = await res.text()
     if (!res.ok) {
-      return { ok: false, detail: `SQL HTTP ${res.status}: ${text.slice(0, 180)}` }
+      return {
+        ok: false,
+        detail: String(res.data?.error || res.data?.message || `SQL ${res.status}`).slice(0, 200),
+      }
     }
-    let parsed: any = {}
-    try {
-      parsed = JSON.parse(text)
-    } catch {
-      return { ok: true, detail: 'SQL dijalankan' }
+    return {
+      ok: true,
+      detail: 'SQL dijalankan',
+      rows: res.data?.rows || [],
     }
-    return { ok: true, detail: 'SQL dijalankan', rows: parsed.rows || [] }
-  } catch {
+  } catch (e: unknown) {
     return {
       ok: false,
-      detail: 'SQL tidak bisa dijalankan dari browser. Pakai file migrasi di repo.',
+      detail: e instanceof Error ? e.message : 'Proxy SQL gagal',
     }
   }
 }
@@ -192,9 +183,10 @@ export async function listNeonTables(connectionUri: string): Promise<string> {
   if (!names.length) return 'Neon terhubung, database kosong (0 tabel di schema public).'
   const counts: string[] = []
   for (const n of names.slice(0, 20)) {
-    const c = await runNeonSql(connectionUri, `SELECT COUNT(*)::int AS c FROM "${String(n).replace(/"/g, '')}"`)
+    const safe = String(n).replace(/"/g, '')
+    const c = await runNeonSql(connectionUri, `SELECT COUNT(*)::int AS c FROM "${safe}"`)
     const num = c.ok && c.rows?.[0]?.c != null ? String(c.rows[0].c) : '?'
-    counts.push(`${n} (${num} baris)`)
+    counts.push(`${safe} (${num} baris)`)
   }
   return 'Tabel Neon (public): ' + counts.join(', ')
 }
@@ -204,7 +196,6 @@ export function wantsNeonProbe(task: string): boolean {
   return /\bneon\b/.test(t) || (/\b(tabel|table|schema|database)\b/.test(t) && /\b(cek|lihat|list|ada)\b/.test(t))
 }
 
-/** User minta ambil/simpan connection string (bukan buat project baru) */
 export function wantsNeonConnectionString(task: string): boolean {
   const t = task.toLowerCase()
   return (
@@ -230,7 +221,6 @@ export function inferNeonName(task: string, fallback: string): string {
     task.match(/(?:untuk|for)\s+[«"']?([a-zA-Z0-9_-]{2,40})/i) ||
     task.match(/nama\s*[:=]\s*([a-zA-Z0-9_-]{2,40})/i)
   if (m?.[1] && !/connection|string|neon$/i.test(m[1])) return m[1]
-  // "untuk neon" → project name "neon"
   const m2 = task.match(/\buntuk\s+([a-zA-Z0-9_-]{2,40})\b/i)
   if (m2?.[1] && !/connection|string/i.test(m2[1])) return m2[1]
   return (fallback || 'vo-db').slice(0, 40)
