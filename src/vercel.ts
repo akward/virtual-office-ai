@@ -215,17 +215,43 @@ export async function probeVercelAccount(token: string): Promise<string> {
     const u = data.user || data
     const name = u.name || u.username || u.email || 'user'
     const email = u.email ? ` (${u.email})` : ''
+
+    const projectNames: string[] = []
+    const seen = new Set<string>()
+    const addProjects = (list: any[]) => {
+      for (const p of list || []) {
+        const n = p?.name
+        if (n && !seen.has(n)) {
+          seen.add(n)
+          projectNames.push(n)
+        }
+      }
+    }
+
+    try {
+      const pr = await vercelFetch(token, '/v9/projects?limit=100')
+      if (pr.ok && Array.isArray(pr.data?.projects)) addProjects(pr.data.projects)
+    } catch { /* */ }
+
     let teamsLine = ''
     try {
-      const tr = await fetch('https://api.vercel.com/v2/teams?limit=20', {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      const td = await tr.json().catch(() => ({}))
-      if (tr.ok && Array.isArray(td.teams) && td.teams.length) {
-        teamsLine = '\nTeam: ' + td.teams.map((t: any) => t.slug || t.name).join(', ')
+      const tr = await vercelFetch(token, '/v2/teams?limit=20')
+      if (tr.ok && Array.isArray(tr.data?.teams) && tr.data.teams.length) {
+        teamsLine = '\nTeam: ' + tr.data.teams.map((t: any) => t.slug || t.name).join(', ')
+        for (const team of tr.data.teams) {
+          const tid = team.id as string
+          if (!tid) continue
+          const tList = await vercelFetch(token, `/v9/projects?limit=100&teamId=${tid}`)
+          if (tList.ok && Array.isArray(tList.data?.projects)) addProjects(tList.data.projects)
+        }
       }
     } catch { /* optional */ }
-    return `Vercel: login OK sebagai ${name}${email}.${teamsLine}`
+
+    const projLine = projectNames.length
+      ? `\nProject (${projectNames.length}): ${projectNames.slice(0, 50).join(', ')}${projectNames.length > 50 ? '…' : ''}`
+      : '\nProject: (tidak ada / token tidak punya akses list)'
+
+    return `Vercel: login OK sebagai ${name}${email}.${teamsLine}${projLine}`
   } catch (e: unknown) {
     return 'Vercel: gagal menghubungi API — ' + (e instanceof Error ? e.message : String(e))
   }
