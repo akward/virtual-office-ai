@@ -102,6 +102,45 @@ async function ensureProject(
   )
 }
 
+async function waitDeploymentReady(
+  token: string,
+  deploymentId: string,
+  teamId?: string
+): Promise<{ ready: boolean; url: string; state: string }> {
+  if (!deploymentId) return { ready: false, url: '', state: 'missing-id' }
+  const qs = teamId ? `?teamId=${encodeURIComponent(teamId)}` : ''
+  let state = 'UNKNOWN'
+  let url = ''
+  for (let i = 0; i < 24; i++) {
+    const r = await vercelFetch(token, `/v13/deployments/${encodeURIComponent(deploymentId)}${qs}`)
+    if (r.ok) {
+      state = String(r.data?.readyState || r.data?.status || '').toUpperCase()
+      const aliases: string[] = []
+      if (Array.isArray(r.data?.alias)) aliases.push(...r.data.alias.map(String))
+      if (r.data?.url) aliases.unshift(String(r.data.url))
+      if (typeof r.data?.aliasAssigned === 'string') aliases.push(String(r.data.aliasAssigned))
+      // Prefer non-hash production style if present; else first alias
+      const pick =
+        aliases.find((a) => !/[a-z0-9]{8,}-[a-z0-9]+\.vercel\.app/i.test(a.replace(/^https?:\/\//, ''))) ||
+        aliases[0] ||
+        ''
+      if (pick) url = pick.startsWith('http') ? pick : `https://${pick}`
+      if (state === 'READY' || state === 'READY_STATE_READY') {
+        return { ready: true, url, state }
+      }
+      if (['ERROR', 'CANCELED', 'FAILED'].includes(state)) {
+        return { ready: false, url, state }
+      }
+    }
+    await new Promise((res) => setTimeout(res, 1500 + i * 150))
+  }
+  return { ready: state === 'READY', url, state }
+}
+
+function stableProjectUrl(projectName: string): string {
+  return `https://${projectName}.vercel.app`
+}
+
 export async function deployToVercel(opts: {
   token: string
   name: string
@@ -136,10 +175,26 @@ export async function deployToVercel(opts: {
     fileArr.push({
       file: 'index.html',
       data: toBase64(
-        '<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>App</title><link rel="stylesheet" href="styles.css"></head><body><div id="app"><h1>Deploy OK</h1></div><script src="app.js"></script></body></html>'
+        '<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>App</title><link rel="stylesheet" href="styles.css"></head><body><div id="app"><h1>Deploy OK</h1><p>Ganti dengan dashboard produksi.</p></div><script src="app.js"></script></body></html>'
       ),
       encoding: 'base64',
     })
+  }
+  if (!seen.has('styles.css')) {
+    fileArr.push({
+      file: 'styles.css',
+      data: toBase64('body{font-family:system-ui,sans-serif;margin:1.5rem;line-height:1.5}h1{font-size:1.4rem}'),
+      encoding: 'base64',
+    })
+    seen.add('styles.css')
+  }
+  if (!seen.has('app.js')) {
+    fileArr.push({
+      file: 'app.js',
+      data: toBase64('console.log("vo deploy ok");'),
+      encoding: 'base64',
+    })
+    seen.add('app.js')
   }
 
   if (!fileArr.length) throw new Error('Tidak ada file valid untuk deploy')
@@ -176,13 +231,17 @@ export async function deployToVercel(opts: {
         }),
       })
       if (retry.ok) {
-        const rawUrl = retry.data.url || retry.data.alias?.[0] || ''
-        const url = rawUrl
-          ? rawUrl.startsWith('http')
-            ? rawUrl
-            : `https://${rawUrl}`
-          : `https://${project.name}.vercel.app`
-        return { url, id: retry.data.id || '' }
+        const depId = String(retry.data.id || '')
+        const waited = await waitDeploymentReady(token, depId, teamId)
+        const url =
+          waited.url ||
+          stableProjectUrl(project.name) ||
+          (retry.data.url
+            ? String(retry.data.url).startsWith('http')
+              ? String(retry.data.url)
+              : `https://${retry.data.url}`
+            : stableProjectUrl(project.name))
+        return { url, id: depId }
       }
       throw new Error(
         errMsg(retry.data, msg) +
@@ -192,14 +251,23 @@ export async function deployToVercel(opts: {
     throw new Error(msg)
   }
 
-  const rawUrl = res.data.url || res.data.alias?.[0] || ''
-  const url = rawUrl
-    ? rawUrl.startsWith('http')
-      ? rawUrl
-      : `https://${rawUrl}`
-    : `https://${project.name}.vercel.app`
+  const depId = String(res.data.id || '')
+  const waited = await waitDeploymentReady(token, depId, teamId)
+  const url =
+    waited.url ||
+    (res.data.alias?.[0]
+      ? String(res.data.alias[0]).startsWith('http')
+        ? String(res.data.alias[0])
+        : `https://${res.data.alias[0]}`
+      : '') ||
+    stableProjectUrl(project.name) ||
+    (res.data.url
+      ? String(res.data.url).startsWith('http')
+        ? String(res.data.url)
+        : `https://${res.data.url}`
+      : stableProjectUrl(project.name))
 
-  return { url, id: res.data.id || '' }
+  return { url, id: depId }
 }
 
 export async function probeVercelAccount(token: string): Promise<string> {
@@ -257,7 +325,6 @@ export async function probeVercelAccount(token: string): Promise<string> {
   }
 }
 
-/** Set / upsert environment variables on a Vercel project */
 export async function setVercelEnvVars(opts: {
   token: string
   projectNameOrId: string
