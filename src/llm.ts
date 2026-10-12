@@ -129,9 +129,27 @@ function isSaneFilename(name: string): boolean {
   return true
 }
 
+export function isJunkAgentOutput(text: string): boolean {
+  const t = text || ''
+  if (/<\|tool_call|tool_call_start|tool_call_end/i.test(t)) return true
+  if (/\{\s*"tool"\s*:\s*"(bash|read|write|shell)"/i.test(t)) return true
+  if (/\/home\/(gibbon|workdir|user)\//i.test(t)) return true
+  if (/synthtraces\/repos/i.test(t)) return true
+  if (/^\s*User Safety\s*:/im.test(t) && t.length < 80) return true
+  if (/^\s*User Safety\s*:\s*safe\s*$/im.test(t)) return true
+  return false
+}
+
 export function sanitizeAgentChat(text: string): string {
   let t = text || ''
+  if (isJunkAgentOutput(t) && !/```/.test(t)) {
+    return ''
+  }
   t = t.replace(/```[\s\S]*?```/g, ' ')
+  t = t.replace(/<\|tool_call[\s\S]*?(?:tool_call_end\|>|$)/gi, ' ')
+  t = t.replace(/\{\s*"tool"\s*:[\s\S]*?\}/g, ' ')
+  t = t.replace(/User Safety\s*:\s*\w+/gi, ' ')
+  t = t.replace(/\/home\/[\w./-]+/g, ' ')
   t = t.replace(/Here's a thinking process:[\s\S]*/gi, ' ')
   t = t.replace(/\*\*Analyze User Input:\*\*[\s\S]*/gi, ' ')
   t = t.replace(/Kamu Budi\. Max 5 baris\.[\s\S]*/gi, ' ')
@@ -148,7 +166,10 @@ export function extractArtifacts(text: string, agentId: string): { cleanText: st
     let finalName = filename.replace(/^\/+/, '').trim()
     if (!finalName) return
     if (!isSaneFilename(finalName)) return
-    if (action === 'upsert' && /JANGAN penjelasan|Max 5 baris|Here's a thinking process|Kamu Budi/i.test(content.slice(0, 400))) {
+    if (action === 'upsert' && /JANGAN penjelasan|Max 5 baris|Here's a thinking process|Kamu Budi|tool_call|User Safety|synthtraces|\/home\/gibbon/i.test(content.slice(0, 800))) {
+      return
+    }
+    if (action === 'upsert' && content.trim().length < 40 && !/html|css|js|json|md/i.test(language)) {
       return
     }
     if (action === 'upsert') {
@@ -199,76 +220,18 @@ export const PROVIDERS = {
   gemini: {
     name: '1. Google AI Studio (default)',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    models: ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'],
-    help: 'Gratis · aistudio.google.com/apikey · model: gemini-3.8-flash',
-  },
-  groq: {
-    name: '2. Groq (cepat)',
-    baseUrl: 'https://api.groq.com/openai/v1',
-    models: ['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'llama-3.1-8b-instant'],
-    help: 'Gratis · console.groq.com/keys',
+    models: ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'],
   },
   openrouter: {
-    name: '3. OpenRouter',
+    name: '2. OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
-    models: ['openrouter/free', 'google/gemini-2.0-flash-exp:free', 'openai/gpt-oss-120b:free'],
-    help: 'Gratis · openrouter.ai/keys · model :free',
-  },
-  custom: {
-    name: '4. Custom',
-    baseUrl: 'https://api.openai.com/v1',
-    models: ['gpt-4o-mini'],
-    help: 'Base URL & model sendiri',
-  },
-} as const
-
-export const SETUP_PRESETS = {
-  gemini: {
-    name: 'Google AI Studio (disarankan gratis)',
-    primary: {
-      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-      model: 'gemini-3.8-flash',
-    },
-    secondary: {
-      baseUrl: 'https://api.groq.com/openai/v1',
-      model: 'openai/gpt-oss-20b',
-    },
-    help: 'Key: aistudio.google.com/apikey · Model utama: gemini-3.8-flash',
+    models: ['openai/gpt-oss-20b', 'google/gemini-2.0-flash-001', 'meta-llama/llama-3.3-70b-instruct'],
   },
   groq: {
-    name: 'Groq (cepat)',
-    primary: {
-      baseUrl: 'https://api.groq.com/openai/v1',
-      model: 'openai/gpt-oss-20b',
-    },
-    secondary: {
-      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-      model: 'gemini-3.8-flash',
-    },
-    help: 'Key: console.groq.com/keys',
+    name: '3. Groq',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it'],
   },
-  openrouter: {
-    name: 'OpenRouter (banyak model free)',
-    primary: {
-      baseUrl: 'https://openrouter.ai/api/v1',
-      model: 'openrouter/free',
-    },
-    secondary: {
-      baseUrl: 'https://api.groq.com/openai/v1',
-      model: 'openai/gpt-oss-20b',
-    },
-    help: 'Key: openrouter.ai/keys · model harus :free',
-  },
-} as const
-
-export type SetupPresetId = keyof typeof SETUP_PRESETS
-
-export function detectProviderFromBaseUrl(baseUrl: string): keyof typeof PROVIDERS {
-  const u = (baseUrl || '').toLowerCase()
-  if (u.includes('generativelanguage.googleapis.com')) return 'gemini'
-  if (u.includes('openrouter.ai')) return 'openrouter'
-  if (u.includes('groq.com')) return 'groq'
-  return 'custom'
 }
 
 export async function callLLMMulti(
@@ -276,86 +239,25 @@ export async function callLLMMulti(
   systemPrompt: string,
   userMessage: string,
   maxTokens = 2000
-): Promise<{ text: string; used: string }> {
-  const chain: { label: string; cfg: AppConfig }[] = [
-    { label: config.model || 'primary', cfg: config },
-  ]
-  if (config.apiKey2 && config.baseUrl2 && config.model2) {
-    chain.push({
-      label: config.model2 + ' (#2)',
-      cfg: { ...config, apiKey: config.apiKey2, baseUrl: config.baseUrl2, model: config.model2 },
-    })
-  }
+): Promise<{ text: string; model: string }> {
+  const keys: { apiKey: string; baseUrl: string; model: string }[] = []
+  if (config.apiKey) keys.push({ apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.model })
+  if (config.apiKey2) keys.push({ apiKey: config.apiKey2, baseUrl: config.baseUrl2 || config.baseUrl, model: config.model2 || config.model })
   for (const extra of config.extraKeys || []) {
-    if (extra.apiKey?.trim() && extra.baseUrl?.trim() && extra.model?.trim()) {
-      chain.push({
-        label: (extra.label || extra.model) + ' (extra)',
-        cfg: { ...config, apiKey: extra.apiKey, baseUrl: extra.baseUrl, model: extra.model },
-      })
-    }
+    if (extra?.apiKey) keys.push({ apiKey: extra.apiKey, baseUrl: extra.baseUrl || config.baseUrl, model: extra.model || config.model })
   }
-  let lastErr: unknown = null
-  for (const item of chain) {
+  if (!keys.length) throw new Error('API Key belum diisi')
+  let lastError = ''
+  for (const k of keys) {
     try {
-      const text = await callLLM(item.cfg, systemPrompt, userMessage, maxTokens)
-      if (!text || /^tidak ada respons\.?$/i.test(text.trim())) {
-        lastErr = new Error('Respons kosong dari ' + item.label)
-        continue
-      }
-      return { text, used: item.label }
+      const text = await callLLM({ ...config, apiKey: k.apiKey, baseUrl: k.baseUrl, model: k.model }, systemPrompt, userMessage, maxTokens)
+      return { text, model: k.model }
     } catch (e: unknown) {
-      lastErr = e
+      lastError = e instanceof Error ? e.message : String(e)
+      if (/429|rate limit/i.test(lastError)) continue
+      if (/401|403|invalid.*key/i.test(lastError) && keys.length > 1) continue
+      if (keys.length === 1) throw e
     }
   }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr || 'Semua API key gagal'))
-}
-
-export async function callLLMEnsemble(
-  config: AppConfig,
-  systemPrompt: string,
-  userMessage: string,
-  maxTokens = 1200
-): Promise<{ text: string; used: string }> {
-  if (!config.apiKey2 || !config.model2) return callLLMMulti(config, systemPrompt, userMessage, maxTokens)
-  const alt: AppConfig = {
-    ...config,
-    apiKey: config.apiKey2,
-    baseUrl: config.baseUrl2 || config.baseUrl,
-    model: config.model2,
-  }
-  const [a, b] = await Promise.allSettled([
-    callLLM(config, systemPrompt, userMessage, maxTokens),
-    callLLM(alt, systemPrompt + '\nBeri sudut pandang alternatif.', userMessage, maxTokens),
-  ])
-  const parts: string[] = []
-  const used: string[] = []
-  if (a.status === 'fulfilled') {
-    parts.push(`### Model ${config.model}\n${a.value}`)
-    used.push(config.model)
-  }
-  if (b.status === 'fulfilled') {
-    parts.push(`### Model ${config.model2}\n${b.value}`)
-    used.push(config.model2)
-  }
-  if (!parts.length) {
-    const err = a.status === 'rejected' ? a.reason : b.status === 'rejected' ? b.reason : 'unknown'
-    throw err instanceof Error ? err : new Error(String(err))
-  }
-  if (parts.length === 1) {
-    return {
-      text: a.status === 'fulfilled' ? a.value : (b as PromiseFulfilledResult<string>).value,
-      used: used.join('+'),
-    }
-  }
-  try {
-    const merged = await callLLM(
-      config,
-      'Gabungkan dua pendapat menjadi satu rencana terbaik, Bahasa Indonesia.',
-      parts.join('\n\n').slice(0, 6000),
-      1400
-    )
-    return { text: merged, used: used.join('+merge') }
-  } catch {
-    return { text: parts.join('\n\n'), used: used.join('+') }
-  }
+  throw new Error(lastError || 'Semua API gagal')
 }
