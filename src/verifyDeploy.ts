@@ -7,6 +7,8 @@ export type VerifyResult = {
   issues: string[]
   snippet: string
   finalUrl: string
+  /** true = Vercel Authentication / Deployment Protection, bukan bug kode */
+  protection?: boolean
 }
 
 /** Buka tab/popup agar user melihat hasil (browser check visual) */
@@ -21,6 +23,13 @@ export function openPreviewBrowser(url: string): void {
       /* ignore */
     }
   }
+}
+
+export function isVercelProtection(v: VerifyResult): boolean {
+  if (v.protection) return true
+  if (v.status === 401) return true
+  const blob = (v.issues.join(' ') + ' ' + v.snippet + ' ' + v.title).toLowerCase()
+  return /deployment protection|vercel authentication|sso-api|unauthorized|_vercel_sso|login to view/i.test(blob)
 }
 
 /** Cek URL lewat proxy serverless /api/verify */
@@ -45,13 +54,27 @@ export async function verifyLiveUrl(url: string): Promise<VerifyResult> {
     if (!res.ok && !data) {
       return { ...empty, issues: [`Proxy verify HTTP ${res.status}`] }
     }
+    const status = Number(data.status || 0)
+    const issues = Array.isArray(data.issues) ? data.issues.map(String) : []
+    const snippet = String(data.snippet || '').slice(0, 1200)
+    const protection =
+      Boolean(data.protection) ||
+      status === 401 ||
+      /sso-api|deployment protection|vercel authentication|_vercel_sso/i.test(snippet + issues.join(' '))
+
     return {
-      ok: Boolean(data.ok),
-      status: Number(data.status || 0),
+      ok: Boolean(data.ok) && !protection,
+      status,
       title: String(data.title || ''),
-      issues: Array.isArray(data.issues) ? data.issues.map(String) : [],
-      snippet: String(data.snippet || '').slice(0, 1200),
+      issues: protection
+        ? [
+            'Vercel Deployment Protection aktif (401/SSO). Bukan error kode. Nonaktifkan di Project → Settings → Deployment Protection, atau buka URL sambil login Vercel.',
+            ...issues,
+          ]
+        : issues,
+      snippet,
       finalUrl: String(data.finalUrl || url),
+      protection,
     }
   } catch (e: unknown) {
     return {
@@ -65,12 +88,23 @@ export function formatVerifyReport(v: VerifyResult): string {
   if (v.ok) {
     return `✅ Live OK (${v.status})${v.title ? ` — ${v.title}` : ''} · ${v.finalUrl}`
   }
+  if (isVercelProtection(v)) {
+    return `🔒 URL dilindungi Vercel Authentication (401/SSO). Bukan bug aplikasi. Nonaktifkan Deployment Protection di dashboard Vercel, atau buka link sambil login. · ${v.finalUrl}`
+  }
   const issues = v.issues.length ? v.issues.join('; ') : 'unknown'
   return `⚠️ Live bermasalah (${v.status}): ${issues} · ${v.finalUrl}`
 }
 
 /** Prompt perbaikan singkat untuk agent coder */
 export function buildHealPrompt(userTask: string, verify: VerifyResult, fileList: string[]): string {
+  if (isVercelProtection(verify)) {
+    return [
+      'JANGAN ubah kode aplikasi.',
+      'Masalah: Vercel Deployment Protection (HTTP 401 / SSO).',
+      'Beritahu user: buka Vercel → project → Settings → Deployment Protection → matikan atau set hanya Preview.',
+      'Output teks singkat saja, tanpa file fence.',
+    ].join('\n')
+  }
   return [
     'Perbaiki aplikasi yang sudah di-deploy agar siap pakai.',
     `Tugas awal user: ${userTask.slice(0, 400)}`,
@@ -79,7 +113,7 @@ export function buildHealPrompt(userTask: string, verify: VerifyResult, fileList
     `Masalah: ${verify.issues.join('; ') || 'tidak jelas'}`,
     verify.snippet ? `Cuplikan halaman:\n${verify.snippet.slice(0, 800)}` : '',
     `File terkait: ${fileList.slice(0, 15).join(', ')}`,
-    'Output HANYA file lengkap yang perlu diubah (```html:index.html dll). Jangan buat file sampah output-*. Jangan penjelasan panjang.',
+    'Output HANYA file lengkap static: ```html:index.html ```css:styles.css ```js:app.js. Jangan React/Next src/pages. Jangan output-*.',
   ]
     .filter(Boolean)
     .join('\n')
