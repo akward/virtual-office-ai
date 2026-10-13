@@ -8,12 +8,28 @@ import { openPreviewBrowser, verifyLiveUrl, formatVerifyReport, type VerifyResul
 
 export function wantsFullAuto(task: string): boolean {
   const t = task.toLowerCase()
-  return /\b(buat|bikin|implement|dashboard|aplikasi|app|website|full|otomatis|otonomi|selesaiin|kerjakan|database|neon)\b/.test(t)
+  // jangan anggap "cek status" / pertanyaan sebagai full auto
+  if (/\b(cek|status|apakah|kenapa|mengapa|bagaimana|jelaskan)\b/.test(t) && !/\b(perbaiki|buat|bikin|deploy ulang)\b/.test(t)) {
+    return false
+  }
+  return /\b(buat|bikin|implement|tulis|scaffold|full otomatis|tanpa campur|selesaikan semua)\b/.test(t)
 }
 
 export function shouldAutoDeploy(task: string): boolean {
   const t = task.toLowerCase()
-  return /\b(deploy|vercel|online|hosting|dashboard|aplikasi|website|app)\b/.test(t) || wantsFullAuto(task)
+  // "cek status deploy" / "apakah sudah online" → JANGAN auto-deploy
+  if (/\b(cek|periksa|lihat|status|apakah|sudah|belum)\b/.test(t) && /\b(deploy|vercel|online|hosting)\b/.test(t)) {
+    return false
+  }
+  if (/\b(cek|status|apakah|kenapa|bagaimana|jelaskan)\b/.test(t) && !/\b(perbaiki|buat|bikin|deploy ulang|publish)\b/.test(t)) {
+    return false
+  }
+  // deploy eksplisit atau bangun app lalu online
+  if (/\b(deploy|publish|online-kan)\b/.test(t)) return true
+  if (/\b(buat|bikin|perbaiki).{0,40}\b(dashboard|aplikasi|website|app)\b/.test(t) && /\b(vercel|online|deploy|hosting)\b/.test(t)) {
+    return true
+  }
+  return false
 }
 
 export function filterProductionArtifacts(
@@ -95,7 +111,6 @@ export async function autoDeployIfNeeded(opts: {
 
   let verify: VerifyResult | null = null
   if (opts.verify !== false && url) {
-    // tunggu CDN + READY settle
     await new Promise((r) => setTimeout(r, 5000))
     opts.addMessage('System', '🔍 Memverifikasi halaman live...')
     verify = await verifyLiveUrl(url)
