@@ -1,5 +1,7 @@
 /** Roster agent Virtual Office — 19 spesialis (pola oh-my-claudecode, ringan di browser) */
 import type { Agent } from './types'
+import { classifyTaskIntent, isChatOnlyTask } from './taskIntent'
+export { classifyTaskIntent, isChatOnlyTask }
 
 export type WorkerSpec = {
   id: string
@@ -35,6 +37,7 @@ export const defaultAgents: Agent[] = [
 
 const RULE =
   ' Bahasa Indonesia. Langsung hasil. ' +
+  'Pahami NIAT user: cek/status/tanya → jawab saja, JANGAN ubah file. Jangan ganti dashboard jadi Deploy Status Checker. ' +
   'LARANGAN KERAS: jangan tool_call, jangan <|tool, jangan JSON {"tool":...}, jangan path /home/, jangan bash/ls/cat, jangan "User Safety". ' +
   'Kamu TIDAK punya terminal dan TIDAK punya tool — hanya tulis teks/file. ' +
   'File produksi HANYA lewat fence: ```html:index.html  ```css:styles.css  ```js:app.js  ```js:api/xxx.js  ```md:README.md  ```json:package.json  ```json:vercel.json. ' +
@@ -42,7 +45,7 @@ const RULE =
   'Database: api/ + Neon, bukan localStorage. Jangan thinking process.'
 
 const SYSTEMS: Record<string, string> = {
-  manager: 'Kamu Budi, PM.' + RULE + ' Koordinasi singkat 3-5 baris. Jangan dump kode. Jangan tool.',
+  manager: 'Kamu Budi, PM.' + RULE + ' Koordinasi singkat 3-5 baris. Jangan dump kode. Jangan tool. Jika user hanya cek status, jawab status saja.',
   planner: 'Kamu Dewi, Planner.' + RULE + ' Langkah 1..n + nama file saja. Tanpa kode. Tanpa tool.',
   architect: 'Kamu Raka, Architect.' + RULE + ' Struktur file singkat. File pakai fence ```lang:path.',
   critic: 'Kamu Maya, Critic.' + RULE + ' Kritik singkat maks 8 baris. Tanpa tool.',
@@ -66,21 +69,6 @@ const SYSTEMS: Record<string, string> = {
   tracer: 'Kamu Sari, Tracer.' + RULE + ' Alur singkat. Tanpa tool.',
 }
 
-export function isChatOnlyTask(task: string): boolean {
-  const head = task.slice(0, 280).toLowerCase().replace(/[`*_#>-]/g, ' ').replace(/\s+/g, ' ').trim()
-  const full = task.toLowerCase().replace(/[`*_#>-]/g, ' ').replace(/\s+/g, ' ').trim()
-
-  if (/\b(perbaiki|fix|buat|bikin|tulis|implement|kodekan|generate|scaffold|deploy|hapus file|push)\b/.test(head)) {
-    return false
-  }
-  if (/\b(apa|apakah|kenapa|mengapa|bagaimana|coba|cek|tolong|jelaskan|ringkas|sudah|bisa masuk|status|terhubung|connected|akun|login|error|gagal|log)\b/.test(head)) {
-    return true
-  }
-  if (/\?\s*$/.test(head) || /\?/.test(head.slice(0, 120))) return true
-  if (full.length < 100 && !/\b(file|html|css|js|react|dashboard|aplikasi)\b/.test(full)) return true
-  return false
-}
-
 export function pickWorkers(task: string, powerMode: boolean): WorkerSpec[] {
   const t = task.toLowerCase()
   const out: WorkerSpec[] = []
@@ -90,13 +78,14 @@ export function pickWorkers(task: string, powerMode: boolean): WorkerSpec[] {
     out.push({ id, name: a.name, system: SYSTEMS[id] || `Kamu ${a.name}, ${a.role}.` + RULE })
   }
 
-  if (isChatOnlyTask(task)) {
+  const intent = classifyTaskIntent(task)
+  if (intent === 'ask' || intent === 'status' || isChatOnlyTask(task)) {
     return []
   }
 
-  const isBuild = /buat|bikin|tulis|implement|dashboard|aplikasi|app|website|halaman|fitur|kode|html|css|js|react|database|neon|api/.test(t)
-  const isFix = /perbaiki|fix|bug|error|debug|rusak|gagal/.test(t)
-  const isDeploy = /deploy|vercel|online|hosting/.test(t)
+  const isBuild = intent === 'build' || /buat|bikin|tulis|implement|dashboard|aplikasi|app|website|halaman|fitur|kode|html|css|js|react|database|neon|api/.test(t)
+  const isFix = intent === 'fix' || /perbaiki|fix|bug|error|debug|rusak|gagal/.test(t)
+  const isDeploy = intent === 'deploy' || (/\b(deploy|publish|online-kan)\b/.test(t) && intent !== 'status')
   const isReview = /review|audit|cek kode|code review/.test(t)
   const isSecure = /keamanan|security|xss|auth|password|token secret|hardening|login/.test(t)
   const isUi = /ui|ux|desain|tampilan|css|style|warna|dashboard/.test(t)
@@ -107,7 +96,6 @@ export function pickWorkers(task: string, powerMode: boolean): WorkerSpec[] {
   const isExplore = /cari|telusuri|explore|bagaimana|dimana|repo/.test(t)
   const fullAuto = /otomatis|full|semua agent|tanpa campur|selesaikan/.test(t) || powerMode
 
-  // Fix + deploy: fokus coder + designer (+ debugger), hindari agent yang suka tool-call
   if (isFix && (isBuild || isDeploy || isUi)) {
     add('coder')
     add('designer')
