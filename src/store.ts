@@ -134,7 +134,6 @@ export const useStore = create<any>((set, get) => ({
       updateAgent('manager', { status: 'thinking', currentTask: 'Berpikir...' })
       addMessage('System', '🧠 Memahami perintah...')
 
-      // Niat seperti ChatGPT/Grok: LLM + fallback heuristik
       let intent: TaskIntent = 'ask'
       try { intent = await classifyTaskIntentWithLLM(config, userTask) }
       catch { intent = isChatOnlyTask(userTask) ? 'ask' : 'build' }
@@ -276,7 +275,7 @@ export const useStore = create<any>((set, get) => ({
       const names = arts.map((a: any) => a.filename)
       addMessage('Budi (Manager)', names.length ? `Selesai. File: ${names.join(', ')}` : 'Selesai.' + (dep.url ? ` Online: ${dep.url}` : ''))
       updateAgent('manager', { status: 'done', currentTask: 'Selesai' })
-      try { await logTaskToSupabase(userTask, intent) } catch { /* */ }
+      try { await logTaskToSupabase(get().github?.username || 'akward', userTask, get().github?.repoFullName, intent) } catch { /* */ }
     } catch (e: unknown) {
       addMessage('System', 'Error: ' + (e instanceof Error ? e.message : String(e)))
       updateAgent('manager', { status: 'error', currentTask: 'Gagal' })
