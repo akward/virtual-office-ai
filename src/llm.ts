@@ -35,7 +35,7 @@ export async function callLLM(
             { role: 'user', content: usr },
           ],
           temperature: 0.45,
-          max_tokens: Math.min(maxTokens, 2500),
+          max_tokens: Math.min(maxTokens, 800),
         }),
       })
     } catch (netErr: unknown) {
@@ -56,7 +56,10 @@ export async function callLLM(
       return content
     }
     const err = await res.text()
-    lastErr = err.slice(0, 250)
+    lastErr = err.slice(0, 280)
+    if (res.status === 402 || /more credits|can only afford|insufficient.*credit/i.test(err)) {
+      throw new Error(`LLM Error 402: kredit API habis / tidak cukup. Isi kredit atau ganti provider. ${lastErr}`)
+    }
     if (res.status === 429 || res.status === 503 || /UNAVAILABLE|high demand|overloaded|capacity/i.test(err)) {
       const wait = res.status === 503
         ? Math.min(45000, 4000 * (attempt + 1) + Math.floor(Math.random() * 1500))
@@ -372,13 +375,10 @@ export async function callLLMMulti(
       return { text, model: k.model }
     } catch (e: unknown) {
       lastError = e instanceof Error ? e.message : String(e)
-      const retryable =
-        /failed to fetch|networkerror|load failed|cors|network request failed/i.test(lastError) ||
-        /429|rate limit|503|UNAVAILABLE|high demand|sibuk|overloaded|insufficient_quota|card_required|model_requires_purchase/i.test(lastError) ||
-        /401|403|invalid.*key|model.*not.*found|404|permission-denied/i.test(lastError)
+      // Selalu coba provider berikutnya (402 kredit, CORS, dll.)
       if (i < queue.length - 1) continue
       throw e instanceof Error ? e : new Error(lastError)
     }
   }
-  throw new Error(lastError || 'Semua API/model gagal. Isi API #2 di Settings atau coba lagi nanti.')
+  throw new Error(lastError || 'Semua API/model gagal. Isi kredit OpenRouter atau ganti ke Gemini/Groq gratis.')
 }
