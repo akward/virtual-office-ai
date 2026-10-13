@@ -21,21 +21,25 @@ function normTask(task: string): string {
 /**
  * Prioritas seperti asisten manusia:
  * "cek status deploy" = status (bukan deploy)
+ * "cek dan lakukan perbaikan" = fix
  * "perbaiki lalu deploy" = fix
  */
 export function classifyTaskIntent(task: string): TaskIntent {
   const t = normTask(task)
 
-  const isAskVerb =
-    /\b(cek|periksa|lihat|status|apa|apakah|kenapa|mengapa|bagaimana|jelaskan|ringkas|info|daftar|list|berapa|sudah|belum|bisakah)\b/.test(
-      t
-    )
+  // Mutasi dulu — termasuk bentuk kata "perbaikan", "perbaiki", "lakukan"
   const isMutateVerb =
-    /\b(perbaiki|fix|buat|bikin|tulis|implement|kodekan|generate|scaffold|hapus semua|hapus file|push ulang|deploy ulang|redeploy|publish|online-kan)\b/.test(
+    /\b(perbaiki|perbaikan|fix|memperbaiki|buat|bikin|tulis|implement|kodekan|generate|scaffold|hapus semua|hapus file|push ulang|deploy ulang|redeploy|publish|online-kan|lakukan)\b/.test(
       t
     )
 
-  if (isAskVerb && !isMutateVerb) {
+  // Tanya murni (tanpa aksi perbaikan/buat)
+  const isAskOnly =
+    /\b(cek|periksa|lihat|status|apa|apakah|kenapa|mengapa|bagaimana|jelaskan|ringkas|info|daftar|list|berapa|sudah|belum|bisakah)\b/.test(
+      t
+    ) && !isMutateVerb
+
+  if (isAskOnly) {
     if (/\b(status|deploy|vercel|online|hosting|terhubung|connected|akun|login|error|log)\b/.test(t)) {
       return 'status'
     }
@@ -47,15 +51,20 @@ export function classifyTaskIntent(task: string): TaskIntent {
   }
   if (/\bhapus semua file\b/.test(t) || /\bdelete all\b/.test(t)) return 'delete'
 
-  if (/\b(perbaiki|fix|bug|debug|rusak|gagal|function_invocation|500|404)\b/.test(t)) return 'fix'
+  if (/\b(perbaiki|perbaikan|fix|memperbaiki|bug|debug|rusak|gagal|function_invocation|500|404)\b/.test(t)) {
+    return 'fix'
+  }
 
-  if (/\b(deploy|publish|online-kan|hosting kan)\b/.test(t) && !/\b(cek|status|apakah)\b/.test(t)) {
+  // Deploy eksplisit tanpa "cek status" murni
+  if (/\b(deploy|publish|online-kan|hosting kan)\b/.test(t) && !isAskOnly) {
     return 'deploy'
   }
 
-  if (/\b(buat|bikin|tulis|implement|kodekan|generate|scaffold|tambahkan fitur)\b/.test(t)) return 'build'
+  if (/\b(buat|bikin|tulis|implement|kodekan|generate|scaffold|tambahkan fitur)\b/.test(t)) {
+    return 'build'
+  }
 
-  if (t.length < 120 && isAskVerb) return 'ask'
+  if (t.length < 120 && isAskOnly) return 'ask'
 
   return 'build'
 }
