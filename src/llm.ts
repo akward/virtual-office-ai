@@ -240,6 +240,52 @@ export const PROVIDERS = {
   },
 }
 
+export type SetupPresetId = 'gemini' | 'groq' | 'openrouter'
+
+export const SETUP_PRESETS: Record<
+  SetupPresetId,
+  { primary: { baseUrl: string; model: string }; secondary: { baseUrl: string; model: string } }
+> = {
+  gemini: {
+    primary: {
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      model: 'gemini-2.0-flash',
+    },
+    secondary: {
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'google/gemini-2.0-flash-001',
+    },
+  },
+  groq: {
+    primary: {
+      baseUrl: 'https://api.groq.com/openai/v1',
+      model: 'llama-3.3-70b-versatile',
+    },
+    secondary: {
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'meta-llama/llama-3.3-70b-instruct',
+    },
+  },
+  openrouter: {
+    primary: {
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'openai/gpt-oss-20b',
+    },
+    secondary: {
+      baseUrl: 'https://api.groq.com/openai/v1',
+      model: 'llama-3.1-8b-instant',
+    },
+  },
+}
+
+export function detectProviderFromBaseUrl(baseUrl: string): SetupPresetId | 'custom' {
+  const b = (baseUrl || '').toLowerCase()
+  if (b.includes('generativelanguage.googleapis') || b.includes('googleapis.com')) return 'gemini'
+  if (b.includes('openrouter')) return 'openrouter'
+  if (b.includes('groq')) return 'groq'
+  return 'custom'
+}
+
 export async function callLLMMulti(
   config: AppConfig,
   systemPrompt: string,
