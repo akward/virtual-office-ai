@@ -20,22 +20,28 @@ export async function callLLM(
   const maxAttempts = 5
   let lastErr = ''
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const res = await fetch(`${config.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [
-          { role: 'system', content: sys },
-          { role: 'user', content: usr },
-        ],
-        temperature: 0.45,
-        max_tokens: Math.min(maxTokens, 2500),
-      }),
-    })
+    let res: Response
+    try {
+      res = await fetch(`${config.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages: [
+            { role: 'system', content: sys },
+            { role: 'user', content: usr },
+          ],
+          temperature: 0.45,
+          max_tokens: Math.min(maxTokens, 2500),
+        }),
+      })
+    } catch (netErr: unknown) {
+      const msg = netErr instanceof Error ? netErr.message : String(netErr)
+      throw new Error(msg || 'Failed to fetch')
+    }
     if (res.ok) {
       const data = await res.json()
       const content = data.choices?.[0]?.message?.content?.trim() || ''
@@ -354,7 +360,8 @@ export async function callLLMMulti(
 
   const queue = keys.flatMap(expand)
   let lastError = ''
-  for (const k of queue) {
+  for (let i = 0; i < queue.length; i++) {
+    const k = queue[i]
     try {
       const text = await callLLM(
         { ...config, apiKey: k.apiKey, baseUrl: k.baseUrl, model: k.model },
@@ -365,9 +372,12 @@ export async function callLLMMulti(
       return { text, model: k.model }
     } catch (e: unknown) {
       lastError = e instanceof Error ? e.message : String(e)
-      if (/429|rate limit|503|UNAVAILABLE|high demand|sibuk|overloaded/i.test(lastError)) continue
-      if (/401|403|invalid.*key|model.*not.*found|404/i.test(lastError)) continue
-      if (queue.length === 1) throw e
+      const retryable =
+        /failed to fetch|networkerror|load failed|cors|network request failed/i.test(lastError) ||
+        /429|rate limit|503|UNAVAILABLE|high demand|sibuk|overloaded|insufficient_quota|card_required|model_requires_purchase/i.test(lastError) ||
+        /401|403|invalid.*key|model.*not.*found|404|permission-denied/i.test(lastError)
+      if (i < queue.length - 1) continue
+      throw e instanceof Error ? e : new Error(lastError)
     }
   }
   throw new Error(lastError || 'Semua API/model gagal. Isi API #2 di Settings atau coba lagi nanti.')
