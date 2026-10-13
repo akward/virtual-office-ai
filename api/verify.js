@@ -39,8 +39,8 @@ export default async function handler(req, res) {
 
     const issues = []
     if (r.status >= 400) issues.push(`HTTP ${r.status}`)
-    if (/APPLICATION_ERROR|FUNCTION_INVOCATION_FAILED|DEPLOYMENT_NOT_FOUND/i.test(snippet)) {
-      issues.push('Vercel application error')
+    if (/APPLICATION_ERROR|FUNCTION_INVOCATION_FAILED|DEPLOYMENT_NOT_FOUND|This page doesn.t exist|never existed/i.test(snippet)) {
+      issues.push('Vercel application error / DEPLOYMENT_NOT_FOUND')
     }
     if (/This Serverless Function has crashed|A server error has occurred/i.test(snippet)) {
       issues.push('Serverless function crashed')
@@ -65,7 +65,20 @@ export default async function handler(req, res) {
       /<body/i.test(snippet) ||
       ct.includes('json')
 
-    const ok = r.status >= 200 && r.status < 400 && issues.length === 0 && (hasAppShell || ct.includes('json'))
+    const protection =
+      r.status === 401 ||
+      /sso-api|deployment protection|vercel authentication|_vercel_sso|login with vercel/i.test(snippet)
+
+    if (protection && !issues.some((x) => /protection|401|sso/i.test(x))) {
+      issues.push('Vercel Deployment Protection / SSO (401)')
+    }
+
+    const ok =
+      !protection &&
+      r.status >= 200 &&
+      r.status < 400 &&
+      issues.length === 0 &&
+      (hasAppShell || ct.includes('json'))
 
     return res.status(200).json({
       ok,
@@ -73,6 +86,7 @@ export default async function handler(req, res) {
       title,
       contentType: ct,
       issues,
+      protection,
       snippet: snippet.slice(0, 1500),
       finalUrl: r.url || url,
     })
@@ -83,6 +97,7 @@ export default async function handler(req, res) {
       issues: [e instanceof Error ? e.message : String(e)],
       snippet: '',
       title: '',
+      protection: false,
     })
   }
 }
