@@ -300,11 +300,11 @@ export const useStore = create<any>((set, get) => ({
 
   saveToBackend: async (opts?: { includeGithubToken?: boolean }) => {
     set({ isSyncingSettings: true })
-    try { await saveToBackendImpl(get, opts) } finally { set({ isSyncingSettings: false }) }
+    try { await saveToBackendImpl({ get, set }, opts) } finally { set({ isSyncingSettings: false }) }
   },
   loadFromBackend: async () => {
     set({ isSyncingSettings: true })
-    try { await loadFromBackendImpl(get, set) } finally { set({ isSyncingSettings: false }) }
+    try { await loadFromBackendImpl({ get, set }) } finally { set({ isSyncingSettings: false }) }
   },
-  bootstrapCloud: async () => { await bootstrapCloudSync(get, set) },
+  bootstrapCloud: async () => { await bootstrapCloudSync({ get, set }) },
 }))
