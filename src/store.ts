@@ -167,8 +167,8 @@ export const useStore = create<any>((set, get) => ({
 
       const statusBlock = `## STATUS\n${liveStatus()}\n${vercelProbe}\n${neonProbe}`
       const thinkSystem = chatOnly
-        ? `Asisten Virtual Office. Bahasa Indonesia. Jawab berdasarkan STATUS. Jangan buat file. Maks 8 baris.\n${mem}\n${statusBlock}`
-        : `Kamu Budi, PM. Bahasa Indonesia. Pahami niat user seperti ChatGPT. Ringkas 3-5 baris apa yang akan dikerjakan. Jangan thinking process.\n${mem}`
+        ? `Asisten Virtual Office. Bahasa Indonesia. Jawab seperti Grok: akurat dari STATUS. Jangan tebak URL fiktif. Jangan buat file. Maks 8 baris.\n${mem}\n${statusBlock}`
+        : `Kamu Budi, PM. Pahami perintah seperti ChatGPT/Grok. (1) Satu kalimat hasil akhir yang user ingin. (2) 2-4 langkah konkret. Jangan ganti topik. Dashboard anggaran multi-user = login+role+chart, BUKAN Deploy Status Checker. Jangan thinking process.\n${mem}`
 
       let thought = ''
       try {
@@ -204,7 +204,7 @@ export const useStore = create<any>((set, get) => ({
       updateAgent('manager', { status: 'thinking', currentTask: 'Rencana...' })
       let plan = ''
       try {
-        const one = await callLLMMulti(config, `Kamu Budi, PM. Rencana maks 5 baris: langkah + file. ${mem}`, `Tugas: ${userTask}\n${thoughtClean.slice(0, 400)}${richContext}`, 400)
+        const one = await callLLMMulti(config, `Kamu Budi, PM. Rencana maks 5 baris mengejar HASIL AKHIR user (langkah + nama file). ${mem}`, `Perintah user:\n${userTask.slice(0, 1500)}\nPemahaman:\n${thoughtClean.slice(0, 400)}${richContext}`, 400)
         plan = one.text
       } catch { plan = await callLLM(config, 'Rencana singkat.', userTask + richContext, 350) }
       const planClean = sanitizeAgentChat(plan).slice(0, 280)
@@ -239,7 +239,7 @@ export const useStore = create<any>((set, get) => ({
         if (wi > 0) await paceBetweenAgents(Math.min(pace, 5000))
         updateAgent(w.id, { status: 'working', currentTask: 'Kerja...' })
         try {
-          const out = await callLLMMulti(config, w.system + mem + '\nOutput bersih. Pahami niat user.', `Tugas: ${userTask.slice(0, 1200)}\nRencana: ${planClean.slice(0, 600)}${richContext}`, tok)
+          const out = await callLLMMulti(config, w.system + mem + '\nOutput bersih. Kerjakan PERSIS yang user minta.', `Perintah user:\n${userTask.slice(0, 1500)}\nRencana PM:\n${planClean.slice(0, 600)}${richContext}`, tok)
           const before = get().artifacts.length
           collectFrom(w.id, out.text)
           const names = get().artifacts.slice(before).map((a: any) => a.filename).filter(Boolean)
