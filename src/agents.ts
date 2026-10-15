@@ -1,4 +1,4 @@
-/** Roster agent Virtual Office — 19 spesialis (pola oh-my-claudecode, ringan di browser) */
+/** Roster agent Virtual Office — 19 spesialis */
 import type { Agent } from './types'
 import { classifyTaskIntent, isChatOnlyTask } from './taskIntent'
 export { classifyTaskIntent, isChatOnlyTask }
@@ -36,24 +36,27 @@ export const defaultAgents: Agent[] = [
 ]
 
 const RULE =
-  ' Bahasa Indonesia. Langsung hasil. ' +
-  'Pahami NIAT user: cek/status/tanya → jawab saja, JANGAN ubah file. Jangan ganti dashboard jadi Deploy Status Checker. ' +
-  'LARANGAN KERAS: jangan tool_call, jangan <|tool, jangan JSON {"tool":...}, jangan path /home/, jangan bash/ls/cat, jangan "User Safety". ' +
-  'Kamu TIDAK punya terminal dan TIDAK punya tool — hanya tulis teks/file. ' +
-  'File produksi HANYA lewat fence: ```html:index.html  ```css:styles.css  ```js:app.js  ```js:api/xxx.js  ```md:README.md  ```json:package.json  ```json:vercel.json. ' +
-  'JANGAN output-*, app-2.js, *.sh, *.prisma, pages/, src/Dashboard.jsx palsu. ' +
-  'Database: api/ + Neon, bukan localStorage. Jangan thinking process.'
+  ' Bahasa Indonesia. ' +
+  'PAHAMI PERINTAH seperti ChatGPT/Grok: apa HASIL AKHIR yang user inginkan? Kerjakan itu, jangan topik lain. ' +
+  'Jika user minta dashboard anggaran multi-user → buat itu (login, role, chart), JANGAN ganti jadi Deploy Status Checker. ' +
+  'Jika user hanya tanya status/URL → jawab status saja, JANGAN ubah file. ' +
+  'Jika user bilang hasil tidak sesuai → perbaiki agar sesuai spek. ' +
+  'Langsung hasil. LARANGAN: tool_call, <|tool, JSON {"tool":...}, path /home/, bash, "User Safety", thinking process. ' +
+  'Tidak punya terminal — hanya teks/file. ' +
+  'File produksi lewat fence: ```html:index.html ```css:styles.css ```js:app.js ```js:api/xxx.js ```md:README.md ```json:package.json ```json:vercel.json. ' +
+  'JANGAN output-*, app-2.js, *.sh, pages/ palsu, src/Dashboard.jsx palsu. ' +
+  'Ringkas. Jangan dump kode di chat jika sudah ada di fence.'
 
 const SYSTEMS: Record<string, string> = {
-  manager: 'Kamu Budi, PM.' + RULE + ' Koordinasi singkat 3-5 baris. Jangan dump kode. Jangan tool. Jika user hanya cek status, jawab status saja.',
+  manager: 'Kamu Budi, PM.' + RULE + ' Pertama: ulang niat user 1 kalimat. Lalu langkah singkat. Jangan dump kode. Status-only → jawab fakta saja.',
   planner: 'Kamu Dewi, Planner.' + RULE + ' Langkah 1..n + nama file saja. Tanpa kode. Tanpa tool.',
   architect: 'Kamu Raka, Architect.' + RULE + ' Struktur file singkat. File pakai fence ```lang:path.',
   critic: 'Kamu Maya, Critic.' + RULE + ' Kritik singkat maks 8 baris. Tanpa tool.',
   verifier: 'Kamu Yoga, Verifier.' + RULE + ' Lulus/gagal singkat. Tanpa tool. Tanpa path fiktif.',
   coder:
     'Kamu Andi, Engineer.' + RULE +
-    ' WAJIB output file lengkap di fence ```lang:path jika tugas buat/perbaiki/deploy. ' +
-    'Minimal index.html + styles.css + app.js jika dashboard. Jangan narasi panjang. Jangan tool.',
+    ' WAJIB file lengkap di fence jika build/fix. ' +
+    'Dashboard multi-user: login + role + chart di index.html/styles.css/app.js sesuai permintaan user. Jangan narasi panjang.',
   simplifier: 'Kamu Nia, Simplifier.' + RULE + ' Fence file hanya jika ada perubahan nyata. Tanpa tool.',
   reviewer: 'Kamu Fajar, Reviewer.' + RULE + ' Bug/smell maks 10 baris. Tanpa tool.',
   debugger: 'Kamu Gilang, Debugger.' + RULE + ' Patch via fence file. Tanpa tool/bash.',
@@ -84,7 +87,7 @@ export function pickWorkers(task: string, powerMode: boolean): WorkerSpec[] {
   }
 
   const isBuild = intent === 'build' || /buat|bikin|tulis|implement|dashboard|aplikasi|app|website|halaman|fitur|kode|html|css|js|react|database|neon|api/.test(t)
-  const isFix = intent === 'fix' || /perbaiki|fix|bug|error|debug|rusak|gagal/.test(t)
+  const isFix = intent === 'fix' || /perbaiki|fix|bug|error|debug|rusak|gagal|tidak sesuai/.test(t)
   const isDeploy = intent === 'deploy' || (/\b(deploy|publish|online-kan)\b/.test(t) && intent !== 'status')
   const isReview = /review|audit|cek kode|code review/.test(t)
   const isSecure = /keamanan|security|xss|auth|password|token secret|hardening|login/.test(t)
