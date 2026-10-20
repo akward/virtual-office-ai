@@ -58,9 +58,11 @@ export function classifyTaskIntent(task: string): TaskIntent {
   }
 
   const wantsMutate =
-    /\b(perbaiki|perbaikan|memperbaiki|fix|buat|bikin|buatkan|tulis|implement|implementasi|kodekan|generate|scaffold|hapus|bersihkan|buang|deploy ulang|redeploy|publish|online-kan|lakukan|kerjakan|selesaikan|update|ubah|ganti|membangun|bangun|kembangkan|sesuaikan)\b/.test(
+    /\b(perbaiki|perbaikan|memperbaiki|fix|buat|bikin|buatkan|tulis|implement|implementasi|kodekan|generate|scaffold|hapus|bersihkan|buang|deploy ulang|redeploy|publish|online-kan|lakukan|kerjakan|selesaikan|update|ubah|ganti|membangun|bangun|kembangkan|sesuaikan|tambahkan|tambah|isi|custom|kustom)\b/.test(
       t
-    )
+    ) ||
+    (/\bsaya ingin\b/.test(t) && /\b(bisa|agar|supaya|custom|input|form|fitur|halaman|page|budget|dropdown)\b/.test(t)) ||
+    (/\b(bisa di custom|bukan hanya dropdown|input budget custom)\b/.test(t))
 
   const wantsAsk =
     /\b(cek|periksa|lihat|status|apa|apakah|kenapa|mengapa|bagaimana|jelaskan|ringkas|info|daftar|list|berapa|sudah|belum|bisakah|tolong bilang|mana|dimana)\b/.test(
