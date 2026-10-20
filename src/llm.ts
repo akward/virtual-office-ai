@@ -84,19 +84,20 @@ export async function callLLM(
     if (res.status === 402 || /more credits|can only afford|insufficient.*credit/i.test(err)) {
       throw new Error(`LLM Error 402: kredit API habis / tidak cukup. Isi kredit atau ganti provider. ${lastErr}`)
     }
-    if (res.status === 429 || res.status === 503 || /UNAVAILABLE|high demand|overloaded|capacity/i.test(err)) {
-      const wait = res.status === 503
-        ? Math.min(45000, 4000 * (attempt + 1) + Math.floor(Math.random() * 1500))
-        : parseRetryMs(err, attempt)
-      if (attempt < maxAttempts - 1) {
-        await sleep(wait)
+    // 429/503: max 1x retry singkat, lalu lempar agar callLLMMulti ganti provider/model
+    if (res.status === 429 || res.status === 503 || /UNAVAILABLE|high demand|overloaded|capacity|rate limit/i.test(err)) {
+      if (attempt < 1) {
+        await sleep(res.status === 503 ? 1200 : 800)
         continue
       }
       throw new Error(
         res.status === 503
-          ? `Model sibuk (503). Coba lagi atau ganti model/API #2. Detail: ${lastErr}`
-          : `Rate limit. Sudah dicoba ${maxAttempts}x. Detail: ${lastErr}`
+          ? `LLM Error 503: model sibuk. Detail: ${lastErr}`
+          : `LLM Error 429: Rate limit. Detail: ${lastErr}`
       )
+    }
+    if (res.status === 404 || /model_not_found|does not exist|do not have access/i.test(err)) {
+      throw new Error(`LLM Error 404: model tidak tersedia. Detail: ${lastErr}`)
     }
     throw new Error(`LLM Error ${res.status}: ${lastErr}`)
   }
@@ -359,13 +360,34 @@ export function detectProviderFromBaseUrl(baseUrl: string): SetupPresetId | 'cus
   return 'custom'
 }
 
+
+export function providerHost(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).hostname.replace(/^www\./, '')
+  } catch {
+    return (baseUrl || '').toLowerCase()
+  }
+}
+
+/** Error yang sebaiknya memicu ganti model/provider */
+export function shouldRotateProvider(err: string): boolean {
+  return /LLM Error (429|402|401|403|404|503)|Rate limit|kredit|credit|quota|insufficient|model_not_found|does not exist|do not have access|invalid.?api.?key|Unauthorized|Failed to fetch|network|UNAVAILABLE|overloaded|capacity|model_requires_purchase|locked on your account/i.test(
+    err || ''
+  )
+}
+
 /** Rantai fallback: kunci utama → model alternatif → kunci cadangan */
 export function describeFallbackChain(config: AppConfig): string {
   const parts: string[] = []
-  if (config.apiKey) parts.push(`1) ${config.model}@${(config.baseUrl || '').replace(/^https?:\/\//, '').slice(0, 28)}`)
-  if (config.apiKey2) parts.push(`2) ${(config.model2 || config.model)}@${(config.baseUrl2 || config.baseUrl || '').replace(/^https?:\/\//, '').slice(0, 28)}`)
-  const n = (config.extraKeys || []).filter((k) => k?.apiKey).length
-  if (n) parts.push(`+${n} extra key`)
+  if (config.apiKey) parts.push(`1) ${config.model}@${providerHost(config.baseUrl || '')}`)
+  if (config.apiKey2) parts.push(`2) ${(config.model2 || config.model)}@${providerHost(config.baseUrl2 || config.baseUrl || '')}`)
+  for (const extra of config.extraKeys || []) {
+    if (extra?.apiKey) {
+      parts.push(
+        `${extra.label || 'extra'}:${extra.model || config.model}@${providerHost(extra.baseUrl || config.baseUrl || '')}`
+      )
+    }
+  }
   return parts.join(' → ') || 'tidak ada API key'
 }
 
@@ -375,62 +397,92 @@ export async function callLLMMulti(
   userMessage: string,
   maxTokens = 2000
 ): Promise<{ text: string; model: string }> {
-  const keys: { apiKey: string; baseUrl: string; model: string }[] = []
-  if (config.apiKey) keys.push({ apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.model })
-  if (config.apiKey2) keys.push({ apiKey: config.apiKey2, baseUrl: config.baseUrl2 || config.baseUrl, model: config.model2 || config.model })
+  type Slot = { apiKey: string; baseUrl: string; model: string; label: string }
+  const keys: Slot[] = []
+  if (config.apiKey) {
+    keys.push({ apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.model, label: 'utama' })
+  }
+  if (config.apiKey2) {
+    keys.push({
+      apiKey: config.apiKey2,
+      baseUrl: config.baseUrl2 || config.baseUrl,
+      model: config.model2 || config.model,
+      label: 'cadangan',
+    })
+  }
   for (const extra of config.extraKeys || []) {
-    if (extra?.apiKey) keys.push({ apiKey: extra.apiKey, baseUrl: extra.baseUrl || config.baseUrl, model: extra.model || config.model })
+    if (extra?.apiKey) {
+      keys.push({
+        apiKey: extra.apiKey,
+        baseUrl: extra.baseUrl || config.baseUrl,
+        model: extra.model || config.model,
+        label: extra.label || 'extra',
+      })
+    }
   }
   if (!keys.length) throw new Error('API Key belum diisi')
 
-  const expand = (k: { apiKey: string; baseUrl: string; model: string }) => {
-    const list = [k]
-    const m = (k.model || '').toLowerCase()
+  const expandModels = (k: Slot): Slot[] => {
+    const list: Slot[] = [k]
     const b = (k.baseUrl || '').toLowerCase()
-    if (b.includes('generativelanguage.googleapis') || m.includes('gemini')) {
-      for (const alt of ['gemini-2.0-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash']) {
-        if (alt !== k.model) list.push({ ...k, model: alt })
-      }
-    }
-    if (b.includes('openrouter')) {
-      // rantai: model user → free/murah → cadangan
-      for (const alt of [
+    const alts: string[] = []
+    if (b.includes('generativelanguage.googleapis') || b.includes('googleapis.com')) {
+      alts.push('gemini-2.0-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash')
+    } else if (b.includes('openrouter')) {
+      alts.push(
         'openai/gpt-oss-20b',
         'google/gemini-2.0-flash-001',
         'meta-llama/llama-3.3-70b-instruct',
         'qwen/qwen-2.5-7b-instruct',
-        'openai/gpt-4o-mini',
-      ]) {
-        if (alt !== k.model) list.push({ ...k, model: alt })
-      }
+        'openrouter/auto'
+      )
+    } else if (b.includes('groq')) {
+      alts.push('llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'gemma2-9b-it')
+    } else if (b.includes('api.x.ai') || b.includes('x.ai')) {
+      alts.push('grok-3-mini', 'grok-3', 'grok-2-latest')
+    } else if (b.includes('experientiallabs')) {
+      alts.push('qwen3.8-flash', 'qwen3.8-27b')
+    } else if (b.includes('cloudflare.com')) {
+      alts.push(
+        '@cf/meta/llama-3.1-8b-instruct',
+        '@cf/openai/gpt-oss-20b',
+        '@cf/meta/llama-3.1-70b-instruct'
+      )
     }
-    if (b.includes('groq')) {
-      for (const alt of ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it', 'mixtral-8x7b-32768']) {
-        if (alt !== k.model) list.push({ ...k, model: alt })
-      }
-    }
-    if (b.includes('api.x.ai') || b.includes('x.ai')) {
-      for (const alt of ['grok-3-mini', 'grok-3', 'grok-2-latest']) {
-        if (alt !== k.model) list.push({ ...k, model: alt })
-      }
-    }
-    if (b.includes('experientiallabs')) {
-      for (const alt of ['qwen3.8-flash', 'qwen3.8-27b', 'qwen3.6-flash']) {
-        if (alt !== k.model) list.push({ ...k, model: alt })
-      }
-    }
-    if (b.includes('cloudflare.com')) {
-      for (const alt of ['@cf/meta/llama-3.1-8b-instruct', '@cf/openai/gpt-oss-20b', '@cf/openai/gpt-oss-120b']) {
-        if (alt !== k.model) list.push({ ...k, model: alt })
-      }
+    for (const alt of alts) {
+      if (alt !== k.model) list.push({ ...k, model: alt })
     }
     return list
   }
 
-  const queue = keys.flatMap(expand)
+  // Interleave: coba model-0 tiap provider dulu, baru alternatif (agar tidak stuck di Cloudflare)
+  const expanded = keys.map(expandModels)
+  const queue: Slot[] = []
+  const maxLen = Math.max(0, ...expanded.map((x) => x.length))
+  for (let i = 0; i < maxLen; i++) {
+    for (const list of expanded) {
+      if (i < list.length) queue.push(list[i])
+    }
+  }
+
+  const seen = new Set<string>()
+  const deduped: Slot[] = []
+  for (const k of queue) {
+    const id = `${providerHost(k.baseUrl)}|${k.model}|${k.apiKey.slice(0, 12)}`
+    if (seen.has(id)) continue
+    seen.add(id)
+    deduped.push(k)
+  }
+
   let lastError = ''
-  for (let i = 0; i < queue.length; i++) {
-    const k = queue[i]
+  const skippedHosts = new Set<string>()
+  const tried: string[] = []
+
+  for (const k of deduped) {
+    const host = providerHost(k.baseUrl)
+    if (skippedHosts.has(host)) continue
+    const tag = `${k.label}:${k.model}@${host}`
+    tried.push(tag)
     try {
       const text = await callLLM(
         { ...config, apiKey: k.apiKey, baseUrl: k.baseUrl, model: k.model },
@@ -438,12 +490,21 @@ export async function callLLMMulti(
         userMessage,
         maxTokens
       )
-      return { text, model: k.model }
+      return { text, model: `${k.model} (${k.label})` }
     } catch (e: unknown) {
       lastError = e instanceof Error ? e.message : String(e)
-      if (i < queue.length - 1) continue
-      throw e instanceof Error ? e : new Error(lastError)
+      // Limit/kuota/key mati di host ini → loncat ke provider lain
+      if (
+        /LLM Error (429|402|401|403)|Rate limit|kredit|credit|quota|insufficient|invalid.?api.?key|Unauthorized|model_requires_purchase|locked on your account|Failed to fetch/i.test(
+          lastError
+        )
+      ) {
+        skippedHosts.add(host)
+      }
     }
   }
-  throw new Error(lastError || 'Semua API/model gagal. Isi kredit OpenRouter atau ganti ke Gemini/Groq/Cloudflare gratis.')
+
+  throw new Error(
+    `Semua provider/model gagal setelah rotasi otomatis.\nDicoba: ${tried.slice(0, 14).join(' → ')}${tried.length > 14 ? '…' : ''}\nTerakhir: ${lastError}`
+  )
 }
