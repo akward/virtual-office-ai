@@ -95,7 +95,18 @@ export const SEEDED_SKILLS: AgentSkill[] = [
     createdAt: 0,
   },
   {
+    id: 'no-empty-core-files',
+    name: 'Jangan wipe file inti',
+    description: 'Jangan push file kosong atau ganti stack sembarangan',
+    triggers: ['tampilan', 'ui', 'css', 'perbaiki', 'input realisasi', 'dashboard', 'styles'],
+    body:
+      'Dilarang mengosongkan index.html/app.js/styles.css. Perbaiki tampilan dengan CSS/JS lengkap di file yang sama. Jangan migrasi ke Next/CRA/Tailwind build kecuali diminta. Hasil harus terlihat lebih baik di halaman Input Realisasi/dashboard.',
+    source: 'seeded',
+    createdAt: 0,
+  },
+  {
     id: 'budget-custom-input',
+
     name: 'Budget custom di form realisasi',
     description: 'Form input realisasi mendukung budget baru, bukan hanya dropdown',
     triggers: ['budget', 'custom', 'kustom', 'dropdown', 'input realisasi', 'realisasi'],
@@ -118,6 +129,9 @@ export const SEEDED_SKILLS: AgentSkill[] = [
 
 /** Pelajaran bawaan dari koreksi berulang user */
 export const SEEDED_LESSONS: string[] = [
+  'Jangan kosongkan index.html/app.js/styles.css — perbaikan UI harus isi lengkap, bukan file 0 byte.',
+  'Repo realisasi-anggaran adalah static SPA (bukan Next.js/CRA/shadcn) kecuali user minta sebaliknya.',
+
   'Jangan ganti dashboard jadi Deploy Status Checker / health-only page.',
   'Jangan dump kode panjang di chat; file lewat artifact/GitHub saja.',
   'Jika user hanya tanya status/URL, jawab saja — jangan push file.',
