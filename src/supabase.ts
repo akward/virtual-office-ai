@@ -240,13 +240,58 @@ export async function loadVoSettings(
 
 export async function insertVoTask(
   cfg: SupabaseConfig,
-  row: { user_key: string; repo?: string; task: string; result_summary?: string }
+  row: {
+    user_key: string
+    repo?: string
+    task: string
+    result_summary?: string
+    status?: string
+  }
 ): Promise<void> {
+  const body: Record<string, unknown> = {
+    user_key: row.user_key,
+    task: row.task,
+    created_at: new Date().toISOString(),
+  }
+  if (row.repo) body.repo = row.repo
+  if (row.result_summary) body.result_summary = row.result_summary
+  if (row.status) body.status = row.status
   await sbFetch(cfg, 'vo_tasks', {
     method: 'POST',
     headers: { Prefer: 'return=minimal' },
-    body: JSON.stringify({ ...row, created_at: new Date().toISOString() }),
+    body: JSON.stringify(body),
   }).catch(() => {})
+}
+
+export type VoTaskRow = {
+  id?: string
+  user_key: string
+  repo?: string
+  task: string
+  status?: string
+  result_summary?: string
+  created_at?: string
+}
+
+/** Riwayat tugas terbaru dari Supabase vo_tasks */
+export async function listVoTasks(
+  cfg: SupabaseConfig,
+  userKey: string,
+  limit = 15
+): Promise<VoTaskRow[]> {
+  if (!isSupabaseConfigured(cfg)) return []
+  const q =
+    `vo_tasks?user_key=eq.${encodeURIComponent(userKey)}` +
+    `&select=id,user_key,repo,task,status,result_summary,created_at` +
+    `&order=created_at.desc&limit=${Math.min(Math.max(limit, 1), 50)}`
+  try {
+    const res = await sbFetch(cfg, q, { method: 'GET', headers: { Prefer: 'return=representation' } })
+    if (!res.ok) return []
+    const rows = await res.json()
+    return Array.isArray(rows) ? rows : []
+  } catch {
+    return []
+  }
 }
 
 export async function testSupabaseConnection(cfg: SupabaseConfig): Promise<string> {
