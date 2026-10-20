@@ -38,11 +38,27 @@ export function filterProductionArtifacts(
   return arts.filter((a) => {
     if (a.action === 'delete') return true
     const f = (a.filename || '').replace(/^\/+/, '')
-    if (!f || f.length > 80) return false
+    if (!f || f.length > 120) return false
     if (isJunkPath(f)) return false
     if (/^output[-_]/i.test(f.split('/').pop() || '')) return false
     if (/\.(sh|dotenv)$/i.test(f)) return false
     if (/^app-\d/i.test(f)) return false
+    // Tolak path framework yang sering salah di repo static SPA
+    if (/^(pages|app)\//i.test(f) && /\.(jsx|tsx)$/i.test(f)) return false
+    if (/^src\/(components|pages)\//i.test(f) && !/^src\/(api|lib)\//i.test(f)) {
+      // izinkan hanya jika bukan React page acak — tetap filter ketat di validate
+    }
+    const content = String(a.content ?? '')
+    // JANGAN pernah push file inti kosong (penyebab UI "semakin jelek")
+    const isCore = /^(index\.html|styles\.css|app\.js|package\.json|vercel\.json)$/i.test(f) || /^api\/[\w.-]+\.js$/i.test(f)
+    if (isCore && content.trim().length < 20) return false
+    // Tolak package.json yang memaksa CRA / Next tanpa diminta
+    if (/^package\.json$/i.test(f)) {
+      if (/react-scripts|next\b|"next":/i.test(content) && !/neondatabase/i.test(content)) {
+        // izinkan hanya jika memang pure static + neon; jika ada react-scripts tanpa entry SPA kita tolak
+        if (/react-scripts|create-react-app|"next":/i.test(content)) return false
+      }
+    }
     if (
       /^(index\.html|styles\.css|app\.js|README\.md|package\.json|vercel\.json|\.gitignore)$/i.test(f) ||
       f.startsWith('api/') ||
@@ -55,6 +71,40 @@ export function filterProductionArtifacts(
     }
     return false
   })
+}
+
+/** Validasi keras sebelum push — cegah wipe & stack salah */
+export function validateArtifactsForPush(
+  arts: { filename: string; content: string; action?: string }[],
+  userTask: string
+): { ok: boolean; reason: string; arts: { filename: string; content: string; action?: string }[] } {
+  const t = (userTask || '').toLowerCase()
+  const cleaned = filterProductionArtifacts(arts)
+  if (!cleaned.length) {
+    return { ok: false, reason: 'Tidak ada file produksi valid untuk di-push', arts: [] }
+  }
+  for (const a of cleaned) {
+    if (a.action === 'delete') continue
+    const f = a.filename
+    const c = String(a.content || '')
+    if (/^(index\.html|app\.js|styles\.css)$/i.test(f) && c.trim().length < 50) {
+      return { ok: false, reason: `File inti ${f} hampir kosong — push dibatalkan (cegah wipe)`, arts: cleaned }
+    }
+    if (/^package\.json$/i.test(f) && /react-scripts|"next":/i.test(c)) {
+      return { ok: false, reason: 'package.json mengarah ke CRA/Next — ditolak untuk repo static SPA', arts: cleaned }
+    }
+    if (/vercel\.json$/i.test(f) && /create-react-app|"outputDirectory":\s*"build"/i.test(c)) {
+      return { ok: false, reason: 'vercel.json CRA/build — ditolak; gunakan static rewrites', arts: cleaned }
+    }
+  }
+  // UI/tampilan fix harus menyentuh styles.css atau app.js
+  if (/\b(tampilan|ui|css|bagus|rapi|input realisasi|halaman)\b/.test(t)) {
+    const touched = cleaned.some((a) => /^(styles\.css|app\.js|index\.html)$/i.test(a.filename) && (a.content || '').length > 50)
+    if (!touched) {
+      return { ok: false, reason: 'Perbaikan tampilan wajib mengubah styles.css / app.js / index.html (bukan hanya docs)', arts: cleaned }
+    }
+  }
+  return { ok: true, reason: '', arts: cleaned }
 }
 
 export async function autoCleanAfterPush(
