@@ -34,6 +34,47 @@ export const SEEDED_SKILLS: AgentSkill[] = [
     createdAt: 0,
   },
   {
+    id: 'dashboard-multi-user',
+    name: 'Dashboard multi-user',
+    description: 'Dashboard dengan role, isolasi data, chart',
+    triggers: [
+      'dashboard',
+      'realisasi',
+      'anggaran',
+      'multi-user',
+      'multi user',
+      'role',
+      'super admin',
+      'unit kerja',
+      'rbac',
+      'login',
+    ],
+    body:
+      'Untuk dashboard multi-user: (1) login role super_admin vs user unit, (2) isolasi data per unit, (3) chart capaian, (4) input realisasi untuk unit sendiri, (5) file inti index.html + styles.css + app.js + api/* bila perlu. JANGAN mengganti jadi Deploy Status Checker, health-only page, atau halaman "Deployment is building".',
+    source: 'seeded',
+    createdAt: 0,
+  },
+  {
+    id: 'bersih-repo',
+    name: 'Bersih repo',
+    description: 'Hapus sampah output-* tanpa menyentuh file inti',
+    triggers: ['sampah', 'junk', 'bersihkan', 'cleanup', 'hapus output', 'bersih repo', 'file sampah'],
+    body:
+      'Hapus HANYA sampah: output-*, app-2.js, app-3.js, note-*.txt sementara. JANGAN hapus/overwrite index.html, styles.css, app.js, README.md, package.json, vercel.json, schema.sql, api/* kecuali user minta eksplisit.',
+    source: 'seeded',
+    createdAt: 0,
+  },
+  {
+    id: 'deploy-static',
+    name: 'Deploy static',
+    description: 'Static site siap Vercel',
+    triggers: ['deploy', 'vercel', 'online', 'hosting', 'publish', 'static'],
+    body:
+      'Untuk deploy static: pastikan index.html entry, assets relatif, vercel.json rewrite bila SPA, jangan Next/React src/pages kecuali diminta. Setelah deploy, hasil harus halaman aplikasi user — bukan status deploy checker.',
+    source: 'seeded',
+    createdAt: 0,
+  },
+  {
     id: 'junk-cleanup',
     name: 'Bersihkan file sampah',
     description: 'Hapus output-* dan file sementara, jangan sentuh file inti',
@@ -53,10 +94,36 @@ export const SEEDED_SKILLS: AgentSkill[] = [
     source: 'seeded',
     createdAt: 0,
   },
+  {
+    id: 'anti-topic-drift',
+    name: 'Jangan drift topik',
+    description: 'Jangan ganti dashboard jadi status checker',
+    triggers: ['dashboard', 'perbaiki', 'tidak sesuai', 'realisasi', 'anggaran', 'deploy'],
+    body:
+      'PEL AJARAN: jangan ganti dashboard jadi Deploy Status Checker. Jika user minta dashboard anggaran, output HARUS tetap dashboard (login/tabel/chart), bukan halaman cek deploy.',
+    source: 'seeded',
+    createdAt: 0,
+  },
+]
+
+/** Pelajaran bawaan dari koreksi berulang user */
+export const SEEDED_LESSONS: string[] = [
+  'Jangan ganti dashboard jadi Deploy Status Checker / health-only page.',
+  'Jangan dump kode panjang di chat; file lewat artifact/GitHub saja.',
+  'Jika user hanya tanya status/URL, jawab saja — jangan push file.',
+  'Hapus sampah output-* tanpa mengubah file inti aplikasi.',
+  'Hasil harus siap pakai: login/role/chart sesuai spek user, bukan skeleton "Memuat data...".',
 ]
 
 function normalizeMemory(parsed: Partial<AgentMemory> | null): AgentMemory {
-  const lessons = Array.isArray(parsed?.lessons) ? parsed!.lessons.slice(-40) : []
+  let lessons = Array.isArray(parsed?.lessons) ? parsed!.lessons.slice(-40) : []
+  // pastikan pelajaran seeded selalu ada
+  for (const L of SEEDED_LESSONS) {
+    if (!lessons.some((x) => (typeof x === 'string' ? x : (x as any)?.text) === L)) {
+      lessons.push(L as any)
+    }
+  }
+  lessons = lessons.slice(-40)
   const prefs = Array.isArray(parsed?.prefs) ? parsed!.prefs.slice(-30) : []
   let skills = Array.isArray(parsed?.skills) ? parsed!.skills.slice(-50) : []
   const byId = new Map(skills.map((s) => [s.id, s]))
@@ -66,6 +133,7 @@ function normalizeMemory(parsed: Partial<AgentMemory> | null): AgentMemory {
   skills = Array.from(byId.values()).slice(-50)
   return { lessons, prefs, skills }
 }
+
 
 export function loadMemory(): AgentMemory {
   if (typeof localStorage === 'undefined') return normalizeMemory(null)
@@ -111,8 +179,11 @@ export function memoryBlock(m: AgentMemory, task?: string): string {
   const lines: string[] = []
   if (m.prefs.length) lines.push('Preferensi user:\n- ' + m.prefs.join('\n- '))
   if (m.lessons.length) {
-    lines.push('Pelajaran dari koreksi user:')
-    for (const L of m.lessons.slice(-12)) lines.push('- ' + L.text)
+    lines.push('Pelajaran dari koreksi user (wajib):')
+    for (const L of m.lessons.slice(-14)) {
+      const text = typeof L === 'string' ? L : (L as any)?.text
+      if (text) lines.push('- ' + text)
+    }
   }
   const skills = task ? matchSkills(m, task) : (m.skills || []).slice(0, 4)
   if (skills.length) {
