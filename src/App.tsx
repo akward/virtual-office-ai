@@ -53,9 +53,9 @@ function OfficeFloor() {
 }
 
 function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { messages, artifacts, config, github, isRunning, isPushing, runTask, clearArtifacts, pushArtifactsToGithub, addMessage, powerMode, pendingPlan, confirmPlan, cancelPlan } = useStore()
+  const { messages, artifacts, config, github, isRunning, isPushing, runTask, clearArtifacts, pushArtifactsToGithub, addMessage, powerMode, pendingPlan, confirmPlan, cancelPlan, taskHistory, loadTaskHistory } = useStore()
   const [task, setTask] = useState('')
-  const [tab, setTab] = useState<'log' | 'files'>('log')
+  const [tab, setTab] = useState<'log' | 'files' | 'history'>('log')
   const [localBusy, setLocalBusy] = useState(false)
   const logEndRef = useRef<HTMLDivElement>(null)
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
@@ -88,6 +88,7 @@ function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) 
       <div className="tabs">
         <button type="button" className={tab === 'log' ? 'active' : ''} onClick={() => setTab('log')}>Log</button>
         <button type="button" className={tab === 'files' ? 'active' : ''} onClick={() => setTab('files')}>Files ({artifacts.length})</button>
+        <button type="button" className={tab === 'history' ? 'active' : ''} onClick={() => { setTab('history'); loadTaskHistory() }}>Riwayat</button>
       </div>
       {tab === 'log' && (
         <div className="log-box">
