@@ -8,6 +8,8 @@ import {
   upsertVoSettings,
   loadVoSettings,
   insertVoTask,
+  listVoTasks,
+  type VoTaskRow,
   loadSbProfiles,
   saveSbProfiles,
   setActiveSbId,
@@ -297,13 +299,27 @@ export function scheduleCloudSave(getSet: GetSet) {
   }, 1200)
 }
 
-export async function logTaskToSupabase(userKey: string, task: string, repo?: string, summary?: string) {
+export async function logTaskToSupabase(
+  userKey: string,
+  task: string,
+  repo?: string,
+  summary?: string,
+  status?: string
+) {
   const sb = loadSupabaseConfig()
   if (!isSupabaseConfigured(sb)) return
   await insertVoTask(sb, {
     user_key: userKey || getCloudUserKey() || 'default',
     repo,
-    task,
-    result_summary: summary,
+    task: task.slice(0, 2000),
+    result_summary: (summary || '').slice(0, 1800),
+    status: status || 'done',
   })
+}
+
+export async function fetchTaskHistory(userKey?: string, limit = 12): Promise<VoTaskRow[]> {
+  const sb = loadSupabaseConfig()
+  if (!isSupabaseConfigured(sb)) return []
+  const key = userKey || getCloudUserKey() || 'akward'
+  return listVoTasks(sb, key, limit)
 }
