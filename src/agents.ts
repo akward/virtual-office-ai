@@ -52,7 +52,7 @@ const SYSTEMS: Record<string, string> = {
   planner: 'Kamu Dewi, Planner.' + RULE + ' Langkah 1..n + nama file saja. Tanpa kode. Tanpa tool.',
   architect: 'Kamu Raka, Architect.' + RULE + ' Struktur file singkat. File pakai fence ```lang:path.',
   critic: 'Kamu Maya, Critic.' + RULE + ' Kritik singkat maks 8 baris. Tanpa tool.',
-  verifier: 'Kamu Yoga, Verifier.' + RULE + ' Lulus/gagal singkat. Tanpa tool. Tanpa path fiktif.',
+  verifier: 'Kamu Yoga, Verifier.' + RULE + ' Tugas: cek apakah HASIL file memenuhi kriteria user. Tolak jika: topik drift (Deploy Status Checker padahal diminta dashboard), file sampah saja, tanpa login/role padahal diminta multi-user, atau skeleton kosong. Format WAJIB baris akhir: VERDICT: PASS atau VERDICT: FAIL — alasan singkat. Tanpa tool. Tanpa path fiktif.' Lulus/gagal singkat. Tanpa tool. Tanpa path fiktif.',
   coder:
     'Kamu Andi, Engineer.' + RULE +
     ' WAJIB file lengkap di fence jika build/fix. ' +
@@ -133,6 +133,30 @@ export function pickWorkers(task: string, powerMode: boolean): WorkerSpec[] {
 
 export function agentById(id: string): Agent | undefined {
   return defaultAgents.find((a) => a.id === id)
+}
+
+/** Verifier wajib setelah worker — sebelum push/merge */
+export function getVerifierWorker(): WorkerSpec {
+  const a = defaultAgents.find((x) => x.id === 'verifier')!
+  return {
+    id: 'verifier',
+    name: a.name,
+    system: SYSTEMS.verifier || `Kamu ${a.name}, Verifier.` + RULE,
+  }
+}
+
+export function parseVerifierVerdict(text: string): { pass: boolean; reason: string } {
+  const t = text || ''
+  const fail = /VERDICT\s*:\s*FAIL/i.test(t)
+  const pass = /VERDICT\s*:\s*PASS/i.test(t)
+  const reason = (t.match(/VERDICT\s*:\s*(?:PASS|FAIL)\s*[—\-–:]?\s*(.+)/i) || [])[1]?.trim() || t.slice(0, 200)
+  if (fail) return { pass: false, reason }
+  if (pass) return { pass: true, reason }
+  // heuristic: mention gagal/tidak sesuai
+  if (/tidak sesuai|gagal|tolak|missing|kurang/i.test(t) && !/lulus|ok\b|sesuai/i.test(t)) {
+    return { pass: false, reason: reason || t.slice(0, 160) }
+  }
+  return { pass: true, reason: reason || 'asumsi lulus (tidak ada VERDICT FAIL)' }
 }
 
 export { SYSTEMS }
