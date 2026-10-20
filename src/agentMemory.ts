@@ -95,6 +95,16 @@ export const SEEDED_SKILLS: AgentSkill[] = [
     createdAt: 0,
   },
   {
+    id: 'budget-custom-input',
+    name: 'Budget custom di form realisasi',
+    description: 'Form input realisasi mendukung budget baru, bukan hanya dropdown',
+    triggers: ['budget', 'custom', 'kustom', 'dropdown', 'input realisasi', 'realisasi'],
+    body:
+      'Jika user minta budget custom di halaman input realisasi: edit app.js (form mode existing vs custom) dan api/realisasi.js (buat row budgets lalu realizations). Jangan buat docs/requirements.md, React CRA, atau src/snippet. Deploy static tetap index.html+app.js.',
+    source: 'seeded',
+    createdAt: 0,
+  },
+  {
     id: 'anti-topic-drift',
     name: 'Jangan drift topik',
     description: 'Jangan ganti dashboard jadi status checker',
