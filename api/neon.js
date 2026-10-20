@@ -17,6 +17,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
 
   if (req.method === 'OPTIONS') {
     return res.status(204).end()
@@ -37,18 +38,29 @@ export default async function handler(req, res) {
 
   const action = body.action || 'createProject'
 
-  // SQL tidak butuh Neon API key — cukup connection string
+  // SQL — hanya host Neon, batasi query berbahaya massal
   if (action === 'runSql') {
     const connectionUri = String(body.connectionUri || body.uri || '').trim()
     const sql = String(body.sql || body.query || '').trim()
     if (!connectionUri || !sql) {
       return res.status(400).json({ error: 'connectionUri dan sql wajib' })
     }
+    if (sql.length > 50000) {
+      return res.status(400).json({ error: 'SQL terlalu panjang' })
+    }
     let host = ''
     try {
-      host = new URL(connectionUri.replace(/^postgres(ql)?:/, 'https:')).hostname
+      host = new URL(connectionUri.replace(/^postgres(ql)?:/i, 'https:')).hostname
     } catch {
       return res.status(400).json({ error: 'Connection URI tidak valid' })
+    }
+    // Hanya endpoint Neon
+    if (!/\.neon\.tech$/i.test(host) && !/\.neon\.build$/i.test(host)) {
+      return res.status(400).json({ error: 'Hanya connection string Neon yang diizinkan' })
+    }
+    // Tolak perintah yang jelas berbahaya di shared proxy
+    if (/\b(drop\s+database|drop\s+schema\s+public|pg_read_file|lo_import|copy\s+.*from\s+program)\b/i.test(sql)) {
+      return res.status(400).json({ error: 'SQL diblokir oleh policy keamanan' })
     }
     try {
       const r = await fetch(`https://${host}/sql`, {
@@ -58,7 +70,7 @@ export default async function handler(req, res) {
           Accept: 'application/json',
           'Neon-Connection-String': connectionUri,
         },
-        body: JSON.stringify({ query: sql, params: body.params || [] }),
+        body: JSON.stringify({ query: sql, params: Array.isArray(body.params) ? body.params.slice(0, 50) : [] }),
       })
       const text = await r.text()
       let data = {}
