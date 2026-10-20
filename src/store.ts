@@ -13,13 +13,19 @@ import {
   formatResultSummary,
   type PendingPlan,
 } from './taskLifecycle'
+import {
+  formatStep,
+  formatGitDiff,
+  decideTaskStatus,
+  buildTaskSummary,
+} from './observability'
 import { deployToVercel, probeVercelAccount, setVercelEnvVars, findVercelProject } from './vercel'
 import { createNeonProject, runNeonSql, wantsNeonDatabase, inferNeonName, listNeonTables, listNeonProjects, wantsNeonProbe, wantsNeonConnectionString, fetchNeonConnectionUri } from './neon'
 import { wantsRepoCleanup, cleanRepoJunk } from './repoCleanup'
 import { wantsFullAuto, filterProductionArtifacts, autoCleanAfterPush, autoDeployIfNeeded } from './autoPipeline'
 import { openPreviewBrowser, verifyLiveUrl, formatVerifyReport } from './verifyDeploy'
 import { loadMemory, saveMemory, memoryBlock } from './agentMemory'
-import { saveToBackendImpl, loadFromBackendImpl, bootstrapCloudSync, logTaskToSupabase } from './storeBackend'
+import { saveToBackendImpl, loadFromBackendImpl, bootstrapCloudSync, logTaskToSupabase, fetchTaskHistory } from './storeBackend'
 
 export const useStore = create<any>((set, get) => ({
   agents: defaultAgents.map((a) => ({ ...a })),
@@ -38,6 +44,7 @@ export const useStore = create<any>((set, get) => ({
   connectors: defaultConnectors(),
   agentMemory: loadMemory(),
   pendingPlan: null as PendingPlan | null,
+  taskHistory: [] as { id?: string; task: string; status?: string; repo?: string; created_at?: string; result_summary?: string }[],
 
   addMessage: (from: string, text: string) => set((s: any) => ({ messages: [...s.messages, { id: crypto.randomUUID(), from, text, at: Date.now() }] })),
   updateAgent: (id: string, patch: Partial<Agent>) => set((s: any) => ({ agents: s.agents.map((a: Agent) => (a.id === id ? { ...a, ...patch } : a)) })),
@@ -100,6 +107,17 @@ export const useStore = create<any>((set, get) => ({
   initOAuthCallback: async () => {
     const patch = await handleGmailOAuthCallback()
     if (patch) get().setConnectors(patch)
+  },
+
+  loadTaskHistory: async () => {
+    try {
+      const user = get().github?.username || 'akward'
+      const rows = await fetchTaskHistory(user, 12)
+      set({ taskHistory: rows })
+      return rows
+    } catch {
+      return []
+    }
   },
 
   confirmPlan: async () => {
@@ -198,13 +216,13 @@ export const useStore = create<any>((set, get) => ({
       const mem = memoryBlock(get().agentMemory, userTask)
 
       updateAgent('manager', { status: 'thinking', currentTask: 'Berpikir...' })
-      addMessage('System', '🧠 Memahami perintah...')
+      addMessage('System', formatStep('intent', 'Pahami niat perintah'))
 
       let intent: TaskIntent = 'ask'
       try { intent = await classifyTaskIntentWithLLM(config, userTask) }
       catch { intent = isChatOnlyTask(userTask) ? 'ask' : 'build' }
       const chatOnly = isChatOnlyIntent(intent)
-      addMessage('System', `Niat: ${intent}` + (chatOnly ? ' — jawab saja.' : ' — kerjakan.'))
+      addMessage('System', formatStep('intent', `Niat = ${intent}`, chatOnly ? 'mode tanya (tanpa file)' : 'mode kerja'))
 
       const liveStatus = () => {
         const c = get().config; const g = get().github; const conn = get().connectors || {}
@@ -252,6 +270,15 @@ export const useStore = create<any>((set, get) => ({
       if (chatOnly) {
         updateAgent('manager', { status: 'done', currentTask: 'Selesai' })
         addMessage('System', 'Mode tanya: tidak membuat file.')
+        try {
+          await logTaskToSupabase(
+            get().github?.username || 'akward',
+            userTask,
+            get().github?.repoFullName,
+            buildTaskSummary({ status: 'ask', intent }),
+            'ask'
+          )
+        } catch { /* */ }
         set({ isRunning: false })
         return
       }
@@ -269,6 +296,7 @@ export const useStore = create<any>((set, get) => ({
       }
 
       updateAgent('manager', { status: 'thinking', currentTask: 'Rencana...' })
+      addMessage('System', formatStep('plan', 'Menyusun rencana singkat'))
       let plan = ''
       try {
         const one = await callLLMMulti(config, `Kamu Budi, PM. Rencana maks 5 baris mengejar HASIL AKHIR user (langkah + nama file). ${mem}`, `Perintah user:\n${userTask.slice(0, 1500)}\nPemahaman:\n${thoughtClean.slice(0, 400)}${richContext}`, 400)
@@ -334,7 +362,7 @@ export const useStore = create<any>((set, get) => ({
       if (artifacts.length) set((s: any) => ({ artifacts: [...s.artifacts, ...artifacts.map((a: any) => ({ ...a, id: crypto.randomUUID(), agentId }))] }))
     }
     try {
-      addMessage('System', '▶️ Eksekusi rencana disetujui...')
+      addMessage('System', formatStep('files', 'Eksekusi disetujui — agent menulis file'))
       updateAgent('manager', { status: 'working', currentTask: 'Eksekusi...' })
 
       if (wantsNeonDatabase(userTask)) {
@@ -358,7 +386,7 @@ export const useStore = create<any>((set, get) => ({
       }
 
       const workers = pickWorkers(userTask, power)
-      addMessage('System', `👥 Tim (${workers.length}): ${workers.map((w) => w.name).join(', ')}`)
+      addMessage('System', formatStep('files', `Tim menulis file (${workers.length})`, workers.map((w) => w.name).join(', ')))
 
       for (let wi = 0; wi < workers.length; wi++) {
         const w = workers[wi]
@@ -379,12 +407,43 @@ export const useStore = create<any>((set, get) => ({
 
       let arts = filterProductionArtifacts(get().artifacts as any[]).filter((a: any) => a.action !== 'delete' && /^[a-zA-Z0-9_./@+-]+$/.test(a.filename))
 
+      let pushOk: string[] = []
+      let pushDeleted: string[] = []
+      let pushErrors: string[] = []
       if (github.autoPush && arts.length > 0) {
-        try { await get().pushArtifactsToGithub() } catch (e: unknown) { addMessage('System', String(e)) }
+        addMessage('System', formatStep('push', 'Push ke GitHub', `${arts.length} file`))
+        try {
+          const files = arts.map((a: any) => ({ path: a.filename, content: a.content, action: a.action }))
+          const pr = await pushMany(
+            { token: github.token!, owner: github.owner!, repo: github.repo!, branch: github.branch || 'main' },
+            files,
+            'VO AI update'
+          )
+          pushOk = pr.ok || files.map((f: any) => f.path)
+          pushDeleted = pr.deleted || []
+          pushErrors = pr.errors || []
+          addMessage('System', formatGitDiff({ changed: pushOk, deleted: pushDeleted, errors: pushErrors }))
+        } catch (e: unknown) {
+          pushErrors = [e instanceof Error ? e.message : String(e)]
+          addMessage('System', formatStep('push', 'Push gagal', pushErrors[0]))
+        }
+      } else if (arts.length) {
+        pushOk = arts.map((a: any) => a.filename)
+        addMessage('System', formatStep('push', 'Auto-push off — file hanya di panel', pushOk.slice(0, 8).join(', ')))
       }
 
+      let cleanDeleted: string[] = []
       if (github.token && github.owner && github.repo) {
-        try { await autoCleanAfterPush({ token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' }, addMessage) } catch { /* */ }
+        try {
+          const cleaned = await autoCleanAfterPush(
+            { token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' },
+            addMessage
+          )
+          cleanDeleted = cleaned.deleted || []
+          if (cleanDeleted.length) {
+            addMessage('System', formatGitDiff({ changed: pushOk, deleted: cleanDeleted }))
+          }
+        } catch { /* */ }
       }
 
       const files = arts.map((a: any) => ({ path: a.filename, content: a.content }))
@@ -398,19 +457,51 @@ export const useStore = create<any>((set, get) => ({
         verify: true,
       })
 
-
       const names = arts.map((a: any) => a.filename)
-      addMessage('System', '✅ Checklist selesai...')
-      const checklist = await runCompletionChecklist({ fileNames: names, deployUrl: dep?.url, task: userTask })
+      addMessage('System', formatStep('checklist', 'Checklist selesai'))
+      const checklist = await runCompletionChecklist({ fileNames: names, deployUrl: dep?.url || undefined, task: userTask })
       for (const c of checklist) {
         addMessage('System', `${c.ok ? '✓' : '✗'} ${c.name}: ${c.detail}`)
       }
-      addMessage('Budi (Manager)', formatResultSummary({ intent, fileNames: names, deployUrl: dep?.url, checklist }))
+      addMessage('Budi (Manager)', formatResultSummary({ intent, fileNames: names, deployUrl: dep?.url || undefined, checklist }))
       updateAgent('manager', { status: 'done', currentTask: 'Selesai' })
-      try { await logTaskToSupabase(get().github?.username || 'akward', userTask, get().github?.repoFullName, intent) } catch { /* */ }
+
+      const status = decideTaskStatus({
+        intent,
+        fileCount: names.length,
+        pushErrors: pushErrors.length,
+        deployUrl: dep?.url,
+        verifyOk: dep?.verify ? dep.verify.ok : null,
+        checklistFail: checklist.filter((c) => !c.ok).length,
+      })
+      const summary = buildTaskSummary({
+        status,
+        intent,
+        files: names,
+        deleted: [...pushDeleted, ...cleanDeleted],
+        deployUrl: dep?.url,
+        verify: dep?.verify ? `${dep.verify.status}:${dep.verify.ok ? 'ok' : 'fail'}` : null,
+        checklist: `${checklist.filter((c) => c.ok).length}/${checklist.length}`,
+      })
+      try {
+        await logTaskToSupabase(get().github?.username || 'akward', userTask, get().github?.repoFullName, summary, status)
+        await get().loadTaskHistory()
+      } catch { /* */ }
+      addMessage('System', formatStep('done', `Status tugas: ${status}`))
     } catch (e: unknown) {
-      addMessage('System', 'Error: ' + (e instanceof Error ? e.message : String(e)))
+      const msg = e instanceof Error ? e.message : String(e)
+      addMessage('System', formatStep('error', 'Eksekusi gagal', msg))
       updateAgent('manager', { status: 'error', currentTask: 'Gagal' })
+      try {
+        await logTaskToSupabase(
+          get().github?.username || 'akward',
+          userTask,
+          get().github?.repoFullName,
+          buildTaskSummary({ status: 'fail', intent, error: msg }),
+          'fail'
+        )
+        await get().loadTaskHistory()
+      } catch { /* */ }
     } finally {
       set({ isRunning: false })
       get().agents.forEach((a: Agent) => { if (a.status === 'working' || a.status === 'thinking') updateAgent(a.id, { status: 'idle', currentTask: '' }) })
@@ -424,9 +515,9 @@ export const useStore = create<any>((set, get) => ({
     if (!arts.length) return
     set({ isPushing: true })
     try {
-      const files = arts.map((a) => ({ path: a.filename, content: a.content }))
-      await pushMany({ token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' }, files, 'VO AI update')
-      addMessage('System', `Update: ${files.map((f) => f.path).join(', ')}`)
+      const files = arts.map((a) => ({ path: a.filename, content: a.content, action: a.action }))
+      const pr = await pushMany({ token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' }, files, 'VO AI update')
+      addMessage('System', formatGitDiff({ changed: pr.ok?.length ? pr.ok : files.map((f) => f.path), deleted: pr.deleted, errors: pr.errors }))
     } finally { set({ isPushing: false }) }
   },
 
