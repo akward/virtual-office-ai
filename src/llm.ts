@@ -359,6 +359,16 @@ export function detectProviderFromBaseUrl(baseUrl: string): SetupPresetId | 'cus
   return 'custom'
 }
 
+/** Rantai fallback: kunci utama → model alternatif → kunci cadangan */
+export function describeFallbackChain(config: AppConfig): string {
+  const parts: string[] = []
+  if (config.apiKey) parts.push(`1) ${config.model}@${(config.baseUrl || '').replace(/^https?:\/\//, '').slice(0, 28)}`)
+  if (config.apiKey2) parts.push(`2) ${(config.model2 || config.model)}@${(config.baseUrl2 || config.baseUrl || '').replace(/^https?:\/\//, '').slice(0, 28)}`)
+  const n = (config.extraKeys || []).filter((k) => k?.apiKey).length
+  if (n) parts.push(`+${n} extra key`)
+  return parts.join(' → ') || 'tidak ada API key'
+}
+
 export async function callLLMMulti(
   config: AppConfig,
   systemPrompt: string,
@@ -383,12 +393,19 @@ export async function callLLMMulti(
       }
     }
     if (b.includes('openrouter')) {
-      for (const alt of ['google/gemini-2.0-flash-001', 'openai/gpt-4o-mini', 'meta-llama/llama-3.3-70b-instruct']) {
+      // rantai: model user → free/murah → cadangan
+      for (const alt of [
+        'openai/gpt-oss-20b',
+        'google/gemini-2.0-flash-001',
+        'meta-llama/llama-3.3-70b-instruct',
+        'qwen/qwen-2.5-7b-instruct',
+        'openai/gpt-4o-mini',
+      ]) {
         if (alt !== k.model) list.push({ ...k, model: alt })
       }
     }
     if (b.includes('groq')) {
-      for (const alt of ['llama-3.1-8b-instant', 'gemma2-9b-it', 'llama-3.3-70b-versatile']) {
+      for (const alt of ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it', 'mixtral-8x7b-32768']) {
         if (alt !== k.model) list.push({ ...k, model: alt })
       }
     }
