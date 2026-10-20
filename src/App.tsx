@@ -53,7 +53,7 @@ function OfficeFloor() {
 }
 
 function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { messages, artifacts, config, github, isRunning, isPushing, runTask, clearArtifacts, pushArtifactsToGithub, addMessage, powerMode } = useStore()
+  const { messages, artifacts, config, github, isRunning, isPushing, runTask, clearArtifacts, pushArtifactsToGithub, addMessage, powerMode, pendingPlan, confirmPlan, cancelPlan } = useStore()
   const [task, setTask] = useState('')
   const [tab, setTab] = useState<'log' | 'files'>('log')
   const [localBusy, setLocalBusy] = useState(false)
@@ -73,10 +73,16 @@ function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => void }) 
       </div>
       <div className="chat-compose">
         <textarea value={task} onChange={(e) => setTask(e.target.value)} rows={3}
-          placeholder={github.repoFullName ? `Tugas untuk ${github.repoFullName}…` : 'Tugas…'}
+          placeholder={pendingPlan ? 'Ketik lanjut / ubah: … / batal — atau pakai tombol' : github.repoFullName ? `Tugas untuk ${github.repoFullName}…` : 'Tugas…'}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleRun() }} />
+        {pendingPlan && !isRunning && (
+          <div className="row-actions" style={{ marginBottom: '0.5rem', gap: '0.4rem', display: 'flex', flexWrap: 'wrap' }}>
+            <button type="button" className="btn btn-primary" onClick={() => confirmPlan()}>▶ Lanjut</button>
+            <button type="button" className="btn-ghost" onClick={() => cancelPlan()}>Batal</button>
+          </div>
+        )}
         <button className="btn btn-primary" disabled={isRunning || !task.trim()} onClick={handleRun}>
-          {isRunning ? 'Agent bekerja...' : powerMode ? '⚡ Jalankan' : 'Kirim'}
+          {isRunning ? 'Agent bekerja...' : pendingPlan ? 'Kirim (lanjut/ubah/batal)' : powerMode ? '⚡ Jalankan' : 'Kirim'}
         </button>
       </div>
       <div className="tabs">
