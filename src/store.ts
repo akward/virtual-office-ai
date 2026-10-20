@@ -1,9 +1,9 @@
 import { create } from 'zustand'
 import type { Agent, AppConfig, GitHubSettings, AgentMemory } from './types'
-import { callLLM, callLLMMulti, extractArtifacts, paceBetweenAgents, sanitizeAgentChat } from './llm'
+import { callLLM, callLLMMulti, extractArtifacts, paceBetweenAgents, sanitizeAgentChat, describeFallbackChain } from './llm'
 import { getAuthenticatedUser, listAllRepos, loadProjectContext, pushMany, createRepo, type GitHubConfig } from './github'
 import { defaultConnectors, saveConnectors, startGmailOAuth, handleGmailOAuthCallback, type ConnectorConfig } from './connectors'
-import { defaultAgents, pickWorkers, isChatOnlyTask } from './agents'
+import { defaultAgents, pickWorkers, isChatOnlyTask, getVerifierWorker, parseVerifierVerdict } from './agents'
 import { classifyTaskIntentWithLLM, isChatOnlyIntent, type TaskIntent } from './taskIntent'
 import {
   parsePlanReply,
@@ -363,6 +363,7 @@ export const useStore = create<any>((set, get) => ({
     }
     try {
       addMessage('System', formatStep('files', 'Eksekusi disetujui — agent menulis file'))
+      try { addMessage('System', 'Model chain: ' + describeFallbackChain(config)) } catch { /* */ }
       updateAgent('manager', { status: 'working', currentTask: 'Eksekusi...' })
 
       if (wantsNeonDatabase(userTask)) {
@@ -406,6 +407,75 @@ export const useStore = create<any>((set, get) => ({
       }
 
       let arts = filterProductionArtifacts(get().artifacts as any[]).filter((a: any) => a.action !== 'delete' && /^[a-zA-Z0-9_./@+-]+$/.test(a.filename))
+
+      // —— Verifier wajib (Yoga): tolak push jika kriteria user belum terpenuhi ——
+      let verifierPass = true
+      let verifierReason = ''
+      try {
+        const vw = getVerifierWorker()
+        updateAgent('verifier', { status: 'working', currentTask: 'Verifikasi hasil...' })
+        addMessage('System', formatStep('checklist', 'Verifier (Yoga) menilai hasil vs perintah user'))
+        const fileNames = arts.map((a: any) => a.filename)
+        const samples = arts.slice(0, 4).map((a: any) => `### ${a.filename}\n${String(a.content || '').slice(0, 400)}`).join('\n')
+        const vOut = await callLLMMulti(
+          config,
+          vw.system + mem,
+          `Tugas user (kriteria):
+${userTask.slice(0, 1800)}
+
+Rencana PM:
+${planClean.slice(0, 500)}
+
+File dihasilkan (${fileNames.length}): ${fileNames.join(', ') || '(kosong)'}
+
+Cuplikan:
+${samples || '(tidak ada)'}
+
+Putuskan VERDICT: PASS atau VERDICT: FAIL.`,
+          500
+        )
+        const verdict = parseVerifierVerdict(vOut.text)
+        verifierPass = verdict.pass
+        verifierReason = verdict.reason
+        addMessage(
+          vw.name,
+          verifierPass
+            ? `VERDICT: PASS — ${verifierReason.slice(0, 180)}`
+            : `VERDICT: FAIL — ${verifierReason.slice(0, 220)}`
+        )
+        updateAgent('verifier', {
+          status: verifierPass ? 'done' : 'error',
+          currentTask: verifierPass ? 'Lulus' : 'Gagal',
+          lastMessage: verifierPass ? 'PASS' : 'FAIL',
+        })
+      } catch (ve: unknown) {
+        // jangan blokir total jika verifier LLM error — lanjut dengan peringatan
+        verifierPass = true
+        verifierReason = 'verifier skip: ' + (ve instanceof Error ? ve.message : String(ve))
+        addMessage('System', 'Verifier skip: ' + verifierReason.slice(0, 160))
+        updateAgent('verifier', { status: 'idle', currentTask: '' })
+      }
+
+      if (!verifierPass) {
+        addMessage('System', formatStep('error', 'Push/deploy dibatalkan — Verifier menolak hasil', verifierReason.slice(0, 200)))
+        addMessage('Budi (Manager)', formatResultSummary({
+          intent,
+          fileNames: arts.map((a: any) => a.filename),
+          checklist: [{ name: 'Verifier', ok: false, detail: verifierReason.slice(0, 160) }],
+        }))
+        updateAgent('manager', { status: 'error', currentTask: 'Ditolak verifier' })
+        try {
+          await logTaskToSupabase(
+            get().github?.username || 'akward',
+            userTask,
+            get().github?.repoFullName,
+            buildTaskSummary({ status: 'fail', intent, files: arts.map((a: any) => a.filename), error: 'verifier: ' + verifierReason }),
+            'fail'
+          )
+          await get().loadTaskHistory()
+        } catch { /* */ }
+        return
+      }
 
       let pushOk: string[] = []
       let pushDeleted: string[] = []
