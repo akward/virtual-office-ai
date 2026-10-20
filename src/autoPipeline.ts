@@ -60,18 +60,20 @@ export function filterProductionArtifacts(
 export async function autoCleanAfterPush(
   cfg: GitHubConfig,
   addMessage: (from: string, text: string) => void
-): Promise<void> {
+): Promise<{ junkFound: number; deleted: string[] }> {
   try {
     const files = await listRepoFiles(cfg, 300)
     const junk = files.filter(isJunkPath)
-    if (!junk.length) return
+    if (!junk.length) return { junkFound: 0, deleted: [] }
     addMessage('System', `Auto-bersih ${junk.length} file sampah di remote...`)
     const result = await cleanRepoJunk(cfg)
     if (result.deleted.length) {
       addMessage('System', `Auto-bersih selesai: ${result.deleted.length} file dihapus.`)
     }
+    return { junkFound: junk.length, deleted: result.deleted || [] }
   } catch (e: unknown) {
     addMessage('System', 'Auto-bersih gagal: ' + (e instanceof Error ? e.message : String(e)))
+    return { junkFound: 0, deleted: [] }
   }
 }
 
@@ -91,30 +93,40 @@ export async function autoDeployIfNeeded(opts: {
 
   let url: string | null = null
   try {
-    opts.addMessage('System', 'Auto-deploy ke Vercel...')
+    opts.addMessage('System', '5️⃣ [deploy] Deploy ke Vercel...')
     const dep = await deployToVercel({
       token: opts.vercelToken,
       name: opts.repoName || 'vo-app',
       files,
     })
     url = dep.url
-    opts.addMessage('System', `Online: ${url}`)
+    opts.addMessage('System', `5️⃣ [deploy] Online: ${url}`)
   } catch (e: unknown) {
     opts.addMessage('System', 'Auto-deploy: ' + (e instanceof Error ? e.message : String(e)))
     return { url: null, verify: null }
   }
 
   if (opts.openBrowser !== false && url) {
-    opts.addMessage('System', '🌐 Membuka browser untuk cek hasil...')
+    opts.addMessage('System', '6️⃣ [verify] Membuka preview browser...')
     openPreviewBrowser(url)
   }
 
   let verify: VerifyResult | null = null
   if (opts.verify !== false && url) {
-    await new Promise((r) => setTimeout(r, 5000))
-    opts.addMessage('System', '🔍 Memverifikasi halaman live...')
+    opts.addMessage('System', '5️⃣ [deploy] Online — lanjut verifikasi URL')
+    await new Promise((r) => setTimeout(r, 4000))
+    opts.addMessage('System', '6️⃣ [verify] HTTP check halaman live...')
     verify = await verifyLiveUrl(url)
+    // satu kali retry jika belum siap (cold start)
+    if (verify && !verify.ok && !verify.protection && (verify.status === 0 || verify.status >= 500 || verify.status === 404)) {
+      opts.addMessage('System', '6️⃣ [verify] Retry HTTP check (cold start)...')
+      await new Promise((r) => setTimeout(r, 6000))
+      verify = await verifyLiveUrl(url)
+    }
     opts.addMessage('System', formatVerifyReport(verify))
+    if (verify.ok) {
+      opts.addMessage('System', `6️⃣ [verify] Cuplikan: ${(verify.title || verify.snippet || 'OK').slice(0, 120)}`)
+    }
   }
 
   return { url, verify }
