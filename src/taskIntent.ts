@@ -49,7 +49,13 @@ export function classifyTaskIntent(task: string): TaskIntent {
 
   if (looksLikeProjectSpec(task)) return 'build'
 
-  if (looksLikeStatusQuestion(task) && !/\b(perbaiki|buat ulang|implement|membangun)\b/.test(t)) {
+  // "cek URL + kerjakan / harus lebih rinci" = kerja, bukan status
+  if (/\b(kerjakan|selesaikan)\b/.test(t) || (/\bharus\b/.test(t) && /\b(rinci|ubah|tambah|perbaiki)\b/.test(t))) {
+    if (/\b(perbaiki|tampilan|rinci|dashboard|form|budget|realisasi)\b/.test(t)) return 'fix'
+    return 'build'
+  }
+
+  if (looksLikeStatusQuestion(task) && !/\b(perbaiki|buat ulang|implement|membangun|kerjakan)\b/.test(t)) {
     return 'status'
   }
 
