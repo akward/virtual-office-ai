@@ -41,7 +41,7 @@ export async function callLLM(
               { role: 'user', content: usr },
             ],
             temperature: 0.45,
-            max_tokens: Math.min(maxTokens, 800),
+            max_tokens: Math.min(Math.max(maxTokens, 1), 4096),
           }),
         })
       } else {
@@ -58,7 +58,7 @@ export async function callLLM(
               { role: 'user', content: usr },
             ],
             temperature: 0.45,
-            max_tokens: Math.min(maxTokens, 800),
+            max_tokens: Math.min(Math.max(maxTokens, 1), 4096),
           }),
         })
       }
