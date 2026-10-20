@@ -5,6 +5,14 @@ import { getAuthenticatedUser, listAllRepos, loadProjectContext, pushMany, creat
 import { defaultConnectors, saveConnectors, startGmailOAuth, handleGmailOAuthCallback, type ConnectorConfig } from './connectors'
 import { defaultAgents, pickWorkers, isChatOnlyTask } from './agents'
 import { classifyTaskIntentWithLLM, isChatOnlyIntent, type TaskIntent } from './taskIntent'
+import {
+  parsePlanReply,
+  wantsSkipConfirm,
+  formatPlanPrompt,
+  runCompletionChecklist,
+  formatResultSummary,
+  type PendingPlan,
+} from './taskLifecycle'
 import { deployToVercel, probeVercelAccount, setVercelEnvVars, findVercelProject } from './vercel'
 import { createNeonProject, runNeonSql, wantsNeonDatabase, inferNeonName, listNeonTables, listNeonProjects, wantsNeonProbe, wantsNeonConnectionString, fetchNeonConnectionUri } from './neon'
 import { wantsRepoCleanup, cleanRepoJunk } from './repoCleanup'
@@ -29,6 +37,7 @@ export const useStore = create<any>((set, get) => ({
   github: { token: '', owner: '', repo: '', branch: 'main', connected: false, username: '', repoFullName: '', autoPush: true } as GitHubSettings,
   connectors: defaultConnectors(),
   agentMemory: loadMemory(),
+  pendingPlan: null as PendingPlan | null,
 
   addMessage: (from: string, text: string) => set((s: any) => ({ messages: [...s.messages, { id: crypto.randomUUID(), from, text, at: Date.now() }] })),
   updateAgent: (id: string, patch: Partial<Agent>) => set((s: any) => ({ agents: s.agents.map((a: Agent) => (a.id === id ? { ...a, ...patch } : a)) })),
@@ -93,9 +102,66 @@ export const useStore = create<any>((set, get) => ({
     if (patch) get().setConnectors(patch)
   },
 
+  confirmPlan: async () => {
+    const p = get().pendingPlan
+    if (!p || get().isRunning) return
+    set({ pendingPlan: null })
+    await get()._executeApprovedTask(p)
+  },
+
+  cancelPlan: () => {
+    if (!get().pendingPlan) return
+    set({ pendingPlan: null })
+    get().addMessage('System', 'Rencana dibatalkan.')
+    get().updateAgent('manager', { status: 'idle', currentTask: '' })
+  },
+
   runTask: async (userTask: string) => {
     const { config, github, addMessage, updateAgent } = get()
     if (get().isRunning) return
+
+    // —— Konfirmasi / batal / revisi rencana tertunda ——
+    const pending = get().pendingPlan
+    if (pending) {
+      const reply = parsePlanReply(userTask)
+      addMessage('Kamu', userTask)
+      if (reply.kind === 'cancel') {
+        set({ pendingPlan: null })
+        addMessage('System', 'Rencana dibatalkan.')
+        updateAgent('manager', { status: 'idle', currentTask: '' })
+        return
+      }
+      if (reply.kind === 'confirm') {
+        set({ pendingPlan: null })
+        await get()._executeApprovedTask(pending)
+        return
+      }
+      if (reply.kind === 'revise') {
+        set({ isRunning: true })
+        try {
+          updateAgent('manager', { status: 'thinking', currentTask: 'Revisi rencana...' })
+          const one = await callLLMMulti(
+            config,
+            `Kamu Budi, PM. Revisi rencana maks 5 baris (langkah + file) sesuai catatan user. ${pending.mem}`,
+            `Tugas asli:\n${pending.task.slice(0, 1500)}\nRencana lama:\n${pending.plan}\nCatatan revisi:\n${reply.note}${pending.richContext}`,
+            400
+          )
+          const planClean = sanitizeAgentChat(one.text).slice(0, 400) || pending.plan
+          const next: PendingPlan = { ...pending, plan: planClean, thought: planClean }
+          set({ pendingPlan: next, isRunning: false })
+          addMessage('Budi (Manager)', formatPlanPrompt(planClean, pending.intent))
+          addMessage('System', '⏸️ Menunggu konfirmasi (lanjut / ubah / batal).')
+          updateAgent('manager', { status: 'idle', currentTask: 'Menunggu konfirmasi' })
+        } catch (e: unknown) {
+          addMessage('System', 'Revisi gagal: ' + (e instanceof Error ? e.message : String(e)))
+          set({ isRunning: false })
+        }
+        return
+      }
+      addMessage('System', 'Masih ada rencana tertunda. Ketik **lanjut**, **ubah: …**, atau **batal**.')
+      return
+    }
+
     set({ isRunning: true, artifacts: [] })
 
     if (wantsNeonConnectionString(userTask)) {
@@ -186,19 +252,20 @@ export const useStore = create<any>((set, get) => ({
       if (chatOnly) {
         updateAgent('manager', { status: 'done', currentTask: 'Selesai' })
         addMessage('System', 'Mode tanya: tidak membuat file.')
+        set({ isRunning: false })
         return
       }
 
       if (wantsRepoCleanup(userTask)) {
         if (!github.token || !github.owner || !github.repo) {
-          addMessage('System', 'Pilih repo GitHub dulu.'); updateAgent('manager', { status: 'done', currentTask: 'Selesai' }); return
+          addMessage('System', 'Pilih repo GitHub dulu.'); updateAgent('manager', { status: 'done', currentTask: 'Selesai' }); set({ isRunning: false }); return
         }
         addMessage('System', 'Membersihkan sampah...')
         try {
           const result = await cleanRepoJunk({ token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' })
           addMessage('Budi (Manager)', `Bersih: terhapus ${result.deleted.length} / target ${result.total}.`)
         } catch (e: unknown) { addMessage('System', String(e)) }
-        updateAgent('manager', { status: 'done', currentTask: 'Selesai' }); return
+        updateAgent('manager', { status: 'done', currentTask: 'Selesai' }); set({ isRunning: false }); return
       }
 
       updateAgent('manager', { status: 'thinking', currentTask: 'Rencana...' })
@@ -207,9 +274,68 @@ export const useStore = create<any>((set, get) => ({
         const one = await callLLMMulti(config, `Kamu Budi, PM. Rencana maks 5 baris mengejar HASIL AKHIR user (langkah + nama file). ${mem}`, `Perintah user:\n${userTask.slice(0, 1500)}\nPemahaman:\n${thoughtClean.slice(0, 400)}${richContext}`, 400)
         plan = one.text
       } catch { plan = await callLLM(config, 'Rencana singkat.', userTask + richContext, 350) }
-      const planClean = sanitizeAgentChat(plan).slice(0, 280)
-      if (planClean) addMessage('Budi (Manager)', planClean)
-      await paceBetweenAgents(pace)
+      const planClean = sanitizeAgentChat(plan).slice(0, 400) || '1. Kerjakan perintah user\n2. Tulis file produksi\n3. Push & deploy bila perlu'
+      addMessage('Budi (Manager)', planClean)
+
+      if (!wantsSkipConfirm(userTask, power)) {
+        const pendingPlan: PendingPlan = {
+          task: userTask,
+          plan: planClean,
+          thought: thoughtClean,
+          intent,
+          power,
+          tok,
+          pace,
+          richContext,
+          mem,
+        }
+        set({ pendingPlan, isRunning: false })
+        addMessage('Budi (Manager)', formatPlanPrompt(planClean, intent))
+        addMessage('System', '⏸️ Menunggu konfirmasi sebelum agent bekerja.')
+        updateAgent('manager', { status: 'idle', currentTask: 'Menunggu konfirmasi' })
+        return
+      }
+
+      await get()._executeApprovedTask({
+        task: userTask,
+        plan: planClean,
+        thought: thoughtClean,
+        intent,
+        power,
+        tok,
+        pace,
+        richContext,
+        mem,
+      })
+    } catch (e: unknown) {
+      addMessage('System', 'Error: ' + (e instanceof Error ? e.message : String(e)))
+      updateAgent('manager', { status: 'error', currentTask: 'Gagal' })
+    } finally {
+      if (!get().pendingPlan) {
+        set({ isRunning: false })
+        get().agents.forEach((a: Agent) => { if (a.status === 'working' || a.status === 'thinking') updateAgent(a.id, { status: 'idle', currentTask: '' }) })
+      }
+    }
+  },
+
+  _executeApprovedTask: async (p: PendingPlan) => {
+    const { config, github, addMessage, updateAgent } = get()
+    set({ isRunning: true, artifacts: [] })
+    const userTask = p.task
+    const planClean = p.plan
+    const intent = p.intent
+    const power = p.power
+    const tok = p.tok
+    const pace = p.pace
+    const richContext = p.richContext
+    const mem = p.mem
+    const collectFrom = (agentId: string, text: string) => {
+      const { artifacts } = extractArtifacts(text, agentId)
+      if (artifacts.length) set((s: any) => ({ artifacts: [...s.artifacts, ...artifacts.map((a: any) => ({ ...a, id: crypto.randomUUID(), agentId }))] }))
+    }
+    try {
+      addMessage('System', '▶️ Eksekusi rencana disetujui...')
+      updateAgent('manager', { status: 'working', currentTask: 'Eksekusi...' })
 
       if (wantsNeonDatabase(userTask)) {
         const neonKey = (get().connectors?.neonApiKey || '').trim()
@@ -272,8 +398,14 @@ export const useStore = create<any>((set, get) => ({
         verify: true,
       })
 
+
       const names = arts.map((a: any) => a.filename)
-      addMessage('Budi (Manager)', names.length ? `Selesai. File: ${names.join(', ')}` : 'Selesai.' + (dep.url ? ` Online: ${dep.url}` : ''))
+      addMessage('System', '✅ Checklist selesai...')
+      const checklist = await runCompletionChecklist({ fileNames: names, deployUrl: dep?.url, task: userTask })
+      for (const c of checklist) {
+        addMessage('System', `${c.ok ? '✓' : '✗'} ${c.name}: ${c.detail}`)
+      }
+      addMessage('Budi (Manager)', formatResultSummary({ intent, fileNames: names, deployUrl: dep?.url, checklist }))
       updateAgent('manager', { status: 'done', currentTask: 'Selesai' })
       try { await logTaskToSupabase(get().github?.username || 'akward', userTask, get().github?.repoFullName, intent) } catch { /* */ }
     } catch (e: unknown) {
