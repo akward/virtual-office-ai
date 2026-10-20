@@ -22,7 +22,7 @@ import {
 import { deployToVercel, probeVercelAccount, setVercelEnvVars, findVercelProject } from './vercel'
 import { createNeonProject, runNeonSql, wantsNeonDatabase, inferNeonName, listNeonTables, listNeonProjects, wantsNeonProbe, wantsNeonConnectionString, fetchNeonConnectionUri } from './neon'
 import { wantsRepoCleanup, cleanRepoJunk } from './repoCleanup'
-import { wantsFullAuto, filterProductionArtifacts, autoCleanAfterPush, autoDeployIfNeeded } from './autoPipeline'
+import { wantsFullAuto, filterProductionArtifacts, validateArtifactsForPush, autoCleanAfterPush, autoDeployIfNeeded } from './autoPipeline'
 import { openPreviewBrowser, verifyLiveUrl, formatVerifyReport } from './verifyDeploy'
 import { loadMemory, saveMemory, memoryBlock } from './agentMemory'
 import { saveToBackendImpl, loadFromBackendImpl, bootstrapCloudSync, logTaskToSupabase, fetchTaskHistory } from './storeBackend'
@@ -434,13 +434,26 @@ export const useStore = create<any>((set, get) => ({
         }
       }
 
-      let arts = filterProductionArtifacts(get().artifacts as any[]).filter((a: any) => a.action !== 'delete' && /^[a-zA-Z0-9_./@+-]+$/.test(a.filename))
+      const validated = validateArtifactsForPush(
+        (get().artifacts as any[]).filter((a: any) => a.action === 'delete' || /^[a-zA-Z0-9_./@+-]+$/.test(a.filename)),
+        userTask
+      )
+      let arts = validated.arts.filter((a: any) => a.action !== 'delete')
+      if (!validated.ok) {
+        addMessage('System', formatStep('error', 'Push dibatalkan — ' + validated.reason))
+        addMessage('Budi (Manager)', 'Gagal guardrail: ' + validated.reason)
+        updateAgent('manager', { status: 'error', currentTask: 'Ditolak guardrail' })
+        try {
+          await logTaskToSupabase(get().github?.username || 'akward', userTask, get().github?.repoFullName, buildTaskSummary({ status: 'fail', intent, files: arts.map((a: any) => a.filename), error: validated.reason }), 'fail')
+        } catch { /* */ }
+        return
+      }
 
       // Tolak hasil "palsu" yang hanya docs/snippet
       const meaningful = arts.filter((a: any) => !/^(docs\/|src\/snippet|src\/auth\.js$|output-)/i.test(a.filename) && !/\.(md|txt)$/i.test(a.filename))
-      if (arts.length && !meaningful.length && /budget|realisasi|form|input|dashboard|app\.js|perbaiki|custom/i.test(userTask)) {
+      if (arts.length && !meaningful.length && /budget|realisasi|form|input|dashboard|app\.js|perbaiki|custom|tampilan|ui/i.test(userTask)) {
         addMessage('System', formatStep('error', 'Hasil agent tidak relevan (hanya docs/snippet) — push dibatalkan'))
-        addMessage('Budi (Manager)', 'Gagal: agent menulis file yang tidak diminta. Ulangi dengan fokusisi file app.js / api/.')
+        addMessage('Budi (Manager)', 'Gagal: agent menulis file yang tidak diminta. Fokus ke app.js / styles.css / api/.')
         updateAgent('manager', { status: 'error', currentTask: 'Hasil tidak relevan' })
         try {
           await logTaskToSupabase(get().github?.username || 'akward', userTask, get().github?.repoFullName, buildTaskSummary({ status: 'fail', intent, files: arts.map((a: any) => a.filename), error: 'hasil tidak relevan' }), 'fail')
