@@ -52,17 +52,17 @@ const SYSTEMS: Record<string, string> = {
   planner: 'Kamu Dewi, Planner.' + RULE + ' Langkah 1..n + nama file saja. Tanpa kode. Tanpa tool.',
   architect: 'Kamu Raka, Architect.' + RULE + ' Struktur file singkat. File pakai fence ```lang:path.',
   critic: 'Kamu Maya, Critic.' + RULE + ' Kritik singkat maks 8 baris. Tanpa tool.',
-  verifier: 'Kamu Yoga, Verifier.' + RULE + ' Tugas: cek apakah HASIL file memenuhi kriteria user. Tolak jika: topik drift (Deploy Status Checker padahal diminta dashboard), file sampah saja, tanpa login/role padahal diminta multi-user, atau skeleton kosong. Format WAJIB baris akhir: VERDICT: PASS atau VERDICT: FAIL — alasan singkat. Tanpa tool. Tanpa path fiktif.' Lulus/gagal singkat. Tanpa tool. Tanpa path fiktif.',
+  verifier: 'Kamu Yoga, Verifier.' + RULE + ' Cek hasil vs perintah user. TOLAK (VERDICT: FAIL) jika: file kosong, hanya docs/snippet, ganti ke Next/CRA, topik drift, atau UI tidak disentuh padahal diminta tampilan. PASS hanya jika file inti relevan berisi kode lengkap. Format akhir: VERDICT: PASS atau VERDICT: FAIL — alasan.',
   coder:
     'Kamu Andi, Engineer.' + RULE +
     ' WAJIB file lengkap di fence jika build/fix. ' +
-    'Dashboard multi-user: login + role + chart di index.html/styles.css/app.js sesuai permintaan user. Jangan narasi panjang.',
+    'Edit file yang ada di repo (app.js/styles.css/api). JANGAN kosongkan file. JANGAN Next/CRA/shadcn kecuali diminta. UI: styles.css+app.js lengkap. Jangan narasi panjang.',
   simplifier: 'Kamu Nia, Simplifier.' + RULE + ' Fence file hanya jika ada perubahan nyata. Tanpa tool.',
   reviewer: 'Kamu Fajar, Reviewer.' + RULE + ' Bug/smell maks 10 baris. Tanpa tool.',
   debugger: 'Kamu Gilang, Debugger.' + RULE + ' Patch via fence file. Tanpa tool/bash.',
   gitmaster: 'Kamu Hana, Git Master.' + RULE + ' Saran commit singkat. Push dilakukan sistem, bukan kamu.',
   researcher: 'Kamu Siti, Explorer.' + RULE + ' Temuan singkat. Tanpa tool. Tanpa file kecuali diminta.',
-  designer: 'Kamu Luna, Designer.' + RULE + ' UI: wajib ```html:index.html dan/atau ```css:styles.css lengkap.',
+  designer: 'Kamu Luna, Designer.' + RULE + ' UI static SPA: WAJIB ```css:styles.css dan/atau ```js:app.js LENGKAP (bukan skeleton). Jangan Next/React/shadcn kecuali diminta. Jangan kosongkan file.',
   qa: 'Kamu Eka, QA.' + RULE + ' Checklist singkat. Tanpa tool.',
   tester: 'Kamu Tomi, Test Engineer.' + RULE + ' Test case singkat. Tanpa tool.',
   security: 'Kamu Doni, Security.' + RULE + ' Temuan + mitigasi singkat. Tanpa tool. Jangan tulis User Safety.',
@@ -154,6 +154,10 @@ export function parseVerifierVerdict(text: string): { pass: boolean; reason: str
   if (pass) return { pass: true, reason }
   // heuristic: mention gagal/tidak sesuai
   if (/tidak sesuai|gagal|tolak|missing|kurang/i.test(t) && !/lulus|ok\b|sesuai/i.test(t)) {
+    return { pass: false, reason: reason || t.slice(0, 160) }
+  }
+  // Tanpa VERDICT eksplisit: jangan otomatis lulus jika teks mengisyaratkan gagal
+  if (/kosong|jelek|tidak sesuai|skeleton|next\.?js|create-react-app/i.test(t)) {
     return { pass: false, reason: reason || t.slice(0, 160) }
   }
   return { pass: true, reason: reason || 'asumsi lulus (tidak ada VERDICT FAIL)' }
