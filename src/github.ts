@@ -394,22 +394,79 @@ export async function pushMany(
   }
 }
 
-export async function loadProjectContext(config: GitHubConfig, maxFiles = 15): Promise<string> {
+/** Pilih path prioritas berdasarkan perintah user */
+export function prioritizePathsForTask(task: string, allFiles: string[]): string[] {
+  const t = (task || '').toLowerCase()
+  const scored: { path: string; score: number }[] = []
+  for (const p of allFiles) {
+    let s = 0
+    const low = p.toLowerCase()
+    if (/\.(md|txt)$/i.test(p) && !/readme/i.test(p)) s -= 5
+    if (/^output-|^docs\/|^src\/snippet/i.test(p)) s -= 10
+    if (/hash|password|argon|bcrypt|login|auth|sha256|keamanan|security/.test(t)) {
+      if (/api\/(db|login|users|auth)/i.test(p)) s += 50
+      if (/package\.json$/i.test(p)) s += 30
+    }
+    if (/tampilan|ui|css|dashboard|input realisasi|form/.test(t)) {
+      if (/^(index\.html|styles\.css|app\.js)$/i.test(p)) s += 40
+    }
+    if (/deploy|vercel/.test(t) && /vercel\.json|package\.json/i.test(p)) s += 20
+    if (/api\//i.test(p)) s += 5
+    if (/^(index\.html|app\.js|styles\.css|package\.json|vercel\.json)$/i.test(p)) s += 8
+    scored.push({ path: p, score: s })
+  }
+  scored.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
+  const top = scored.filter((x) => x.score > 0).map((x) => x.path)
+  const base = ['package.json', 'index.html', 'app.js', 'styles.css', 'api/db.js', 'api/login.js', 'api/users.js', 'vercel.json']
+  const merged: string[] = []
+  for (const p of [...top, ...base]) {
+    if (allFiles.includes(p) && !merged.includes(p)) merged.push(p)
+  }
+  return merged
+}
+
+export async function loadProjectContext(
+  config: GitHubConfig,
+  maxFiles = 15,
+  taskHint = ''
+): Promise<string> {
   const parts: string[] = []
+  let all: string[] = []
   try {
-    const all = await listRepoFiles(config, 300)
-    if (all.length) parts.push('--- DAFTAR FILE DI REPO ---\n' + all.join('\n'))
+    all = await listRepoFiles(config, 300)
+    if (all.length) parts.push('--- DAFTAR FILE DI REPO (wajib pakai path dari sini) ---\n' + all.join('\n'))
   } catch {
     /* ignore */
   }
-  for (const path of ['README.md', 'index.html', 'styles.css', 'app.js', 'package.json']) {
-    if (parts.length > maxFiles) break
+  const priority = prioritizePathsForTask(taskHint, all.length ? all : [
+    'README.md', 'index.html', 'styles.css', 'app.js', 'package.json',
+    'api/db.js', 'api/login.js', 'api/users.js', 'api/data.js', 'api/realisasi.js',
+  ])
+  const defaults = ['README.md', 'index.html', 'styles.css', 'app.js', 'package.json']
+  const toLoad = [...priority]
+  for (const p of defaults) {
+    if (!toLoad.includes(p)) toLoad.push(p)
+  }
+  let loaded = 0
+  for (const path of toLoad) {
+    if (loaded >= maxFiles) break
     try {
       const f = await getFile(config, path)
-      if (f) parts.push(`--- FILE: ${f.path} ---\n${f.content.slice(0, 5000)}`)
+      if (f) {
+        parts.push(`--- FILE: ${f.path} ---\n${f.content.slice(0, 8000)}`)
+        loaded++
+      }
     } catch {
       /* ignore */
     }
   }
+  parts.push(
+    '--- ATURAN EDIT ---\n' +
+      '1. Edit HANYA file yang ada di daftar di atas (path persis).\n' +
+      '2. Jangan buat app-2.js, api/auth.js, src/snippet, docs/requirements kecuali diminta.\n' +
+      '3. Password/hash/login → api/db.js + api/login.js + api/users.js + package.json.\n' +
+      '4. Output file lengkap dalam fence ```lang:path (bukan cuplikan kosong).\n' +
+      '5. Jangan bilang "tidak punya akses GitHub" — konteks repo sudah diberikan sistem.'
+  )
   return parts.join('\n\n')
 }
