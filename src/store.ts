@@ -236,11 +236,24 @@ export const useStore = create<any>((set, get) => ({
     }
 
     try {
-      const power = get().powerMode
+            const power = get().powerMode
       const pace = power ? 3500 : 6000
       const tok = power ? 2000 : 1200
-      const ctx = get().projectContext
-      const richContext = ctx ? `\n\n## REPO\n${ctx.slice(0, power ? 6000 : 2500)}` : `\n\n## REPO: ${github.repoFullName}`
+      // Muat ulang konteks fokus perintah (hash → api/db.js, dll.)
+      let ctx = get().projectContext
+      if (github.token && github.owner && github.repo) {
+        try {
+          ctx = await loadProjectContext(
+            { token: github.token, owner: github.owner, repo: github.repo, branch: github.branch || 'main' },
+            power ? 18 : 12,
+            userTask
+          )
+          set({ projectContext: ctx })
+        } catch { /* pakai cache */ }
+      }
+      const richContext = ctx
+        ? `\n\n## REPO\n${ctx.slice(0, power ? 14000 : 9000)}`
+        : `\n\n## REPO: ${github.repoFullName || '(belum pilih)'}\nPilih repo di sidebar agar agent bisa baca file.`
       const mem = memoryBlock(get().agentMemory, userTask)
 
       updateAgent('manager', { status: 'thinking', currentTask: 'Berpikir...' })
@@ -327,7 +340,7 @@ export const useStore = create<any>((set, get) => ({
       addMessage('System', formatStep('plan', 'Menyusun rencana singkat'))
       let plan = ''
       try {
-        const one = await callLLMMulti(config, `Kamu Budi, PM. Rencana maks 5 baris. WAJIB mengerjakan PERINTAH USER apa adanya (bukan proyek baru). Sebut file konkret di repo aktif (mis. app.js, api/*.js). Jangan buat docs/requirements.md atau React CRA kecuali diminta. ${mem}`, `Perintah user (UTAMA):\n${userTask.slice(0, 1500)}\nPemahaman:\n${thoughtClean.slice(0, 400)}${richContext}\nJika user minta budget custom / form input: ubah app.js + api/realisasi.js saja.`, 400)
+        const one = await callLLMMulti(config, `Kamu Budi, PM. Rencana maks 5 baris. WAJIB perintah user apa adanya. Sebut HANYA path yang muncul di DAFTAR FILE REPO. Hash/password/argon2 → api/db.js, api/login.js, api/users.js, package.json (bukan app.js). Jangan docs/CRA kecuali diminta. ${mem}`, `Perintah user (UTAMA):\n${userTask.slice(0, 1500)}\nPemahaman:\n${thoughtClean.slice(0, 400)}${richContext}\nPetunjuk: budget custom → app.js + api/realisasi.js; hash password → api/db.js + login + users + package.json.`, 400)
         plan = one.text
       } catch { plan = await callLLM(config, 'Rencana singkat.', userTask + richContext, 350) }
       const planClean = sanitizeAgentChat(plan).slice(0, 400) || '1. Kerjakan perintah user\n2. Tulis file produksi\n3. Push & deploy bila perlu'
@@ -422,7 +435,16 @@ export const useStore = create<any>((set, get) => ({
         if (wi > 0) await paceBetweenAgents(Math.min(pace, 5000))
         updateAgent(w.id, { status: 'working', currentTask: 'Kerja...' })
         try {
-          const out = await callLLMMulti(config, w.system + mem + '\nOutput bersih. Kerjakan PERSIS yang user minta.', `Perintah user:\n${userTask.slice(0, 1500)}\nRencana PM:\n${planClean.slice(0, 600)}${richContext}`, tok)
+          const out = await callLLMMulti(
+            config,
+            w.system +
+              mem +
+              '\nOutput bersih. Kerjakan PERSIS perintah user. ' +
+              'Pakai path dari DAFTAR FILE REPO saja. Hash/password → api/db.js+api/login.js+api/users.js+package.json. ' +
+              'Jangan bilang tidak punya akses. WAJIB fence ```lang:path berisi file lengkap.',
+            `Perintah user:\n${userTask.slice(0, 1500)}\nRencana PM:\n${planClean.slice(0, 600)}${richContext}`,
+            tok
+          )
           const before = get().artifacts.length
           collectFrom(w.id, out.text)
           const names = get().artifacts.slice(before).map((a: any) => a.filename).filter(Boolean)
@@ -451,7 +473,7 @@ export const useStore = create<any>((set, get) => ({
 
       // Tolak hasil "palsu" yang hanya docs/snippet
       const meaningful = arts.filter((a: any) => !/^(docs\/|src\/snippet|src\/auth\.js$|output-)/i.test(a.filename) && !/\.(md|txt)$/i.test(a.filename))
-      if (arts.length && !meaningful.length && /budget|realisasi|form|input|dashboard|app\.js|perbaiki|custom|tampilan|ui/i.test(userTask)) {
+      if (arts.length && !meaningful.length && /budget|realisasi|form|input|dashboard|app\.js|perbaiki|custom|tampilan|ui|hash|password|argon|login|api\/db/i.test(userTask)) {
         addMessage('System', formatStep('error', 'Hasil agent tidak relevan (hanya docs/snippet) — push dibatalkan'))
         addMessage('Budi (Manager)', 'Gagal: agent menulis file yang tidak diminta. Fokus ke app.js / styles.css / api/.')
         updateAgent('manager', { status: 'error', currentTask: 'Hasil tidak relevan' })
@@ -510,24 +532,76 @@ Putuskan VERDICT: PASS atau VERDICT: FAIL.`,
       }
 
       if (!verifierPass) {
-        addMessage('System', formatStep('error', 'Push/deploy dibatalkan — Verifier menolak hasil', verifierReason.slice(0, 200)))
-        addMessage('Budi (Manager)', formatResultSummary({
-          intent,
-          fileNames: arts.map((a: any) => a.filename),
-          checklist: [{ name: 'Verifier', ok: false, detail: verifierReason.slice(0, 160) }],
-        }))
-        updateAgent('manager', { status: 'error', currentTask: 'Ditolak verifier' })
+        // Satu kali retry otomatis dengan umpan balik verifier
+        addMessage('System', formatStep('files', 'Verifier FAIL — retry 1× dengan koreksi', verifierReason.slice(0, 160)))
         try {
-          await logTaskToSupabase(
-            get().github?.username || 'akward',
-            userTask,
-            get().github?.repoFullName,
-            buildTaskSummary({ status: 'fail', intent, files: arts.map((a: any) => a.filename), error: 'verifier: ' + verifierReason }),
-            'fail'
+          const fixWorkers = pickWorkers(userTask, false).filter((w) =>
+            ['coder', 'debugger', 'simplifier'].includes(w.id)
           )
-          await get().loadTaskHistory()
-        } catch { /* */ }
-        return
+          const retryList = fixWorkers.length ? fixWorkers.slice(0, 2) : pickWorkers(userTask, false).slice(0, 2)
+          for (const w of retryList) {
+            updateAgent(w.id, { status: 'working', currentTask: 'Perbaiki (retry)...' })
+            try {
+              const out = await callLLMMulti(
+                config,
+                w.system + mem +
+                  ' PERBAIKI sesuai kritik verifier. Output file lengkap ```lang:path dari daftar REPO saja.',
+                `Tugas user:\n${userTask.slice(0, 1200)}\n\nVerifier FAIL karena:\n${verifierReason.slice(0, 400)}\n\nFile sebelumnya salah: ${(get().artifacts as any[]).map((a: any) => a.filename).join(', ')}\n\n${richContext.slice(0, 9000)}`,
+                tok
+              )
+              const clean = sanitizeAgentChat(out.text)
+              addMessage(w.name, clean.slice(0, 1200) || 'Selesai.')
+              collectFrom(w.id, out.text)
+              updateAgent(w.id, { status: 'done', currentTask: 'Retry selesai', lastMessage: clean.slice(0, 80) })
+            } catch (re: unknown) {
+              updateAgent(w.id, { status: 'error', currentTask: 'Retry gagal' })
+              addMessage(w.name, 'Error: ' + (re instanceof Error ? re.message : String(re)))
+            }
+            await paceBetweenAgents(pace)
+          }
+          // re-validate artifacts after retry
+          const reval = validateArtifactsForPush(
+            (get().artifacts as any[]).filter((a: any) => a.action === 'delete' || /^[a-zA-Z0-9_./@+-]+$/.test(a.filename)),
+            userTask
+          )
+          arts = reval.arts.filter((a: any) => a.action !== 'delete')
+          const samples2 = arts
+            .slice(0, 4)
+            .map((a: any) => `### ${a.filename}\n${String(a.content || '').slice(0, 280)}`)
+            .join('\n')
+          const vOut2 = await callLLMMulti(
+            config,
+            (getVerifierWorker().system || '') + mem,
+            `Tugas user:\n${userTask.slice(0, 1500)}\nFile setelah retry: ${arts.map((a: any) => a.filename).join(', ')}\n${samples2}\nVERDICT: PASS atau FAIL.`,
+            400
+          )
+          const v2 = parseVerifierVerdict(vOut2.text)
+          verifierPass = v2.pass
+          verifierReason = v2.reason
+          addMessage(getVerifierWorker().name, verifierPass ? `VERDICT: PASS — ${verifierReason.slice(0, 160)}` : `VERDICT: FAIL — ${verifierReason.slice(0, 200)}`)
+        } catch (rx: unknown) {
+          addMessage('System', 'Retry verifier gagal: ' + (rx instanceof Error ? rx.message : String(rx)))
+        }
+        if (!verifierPass) {
+          addMessage('System', formatStep('error', 'Push/deploy dibatalkan — Verifier menolak hasil', verifierReason.slice(0, 200)))
+          addMessage('Budi (Manager)', formatResultSummary({
+            intent,
+            fileNames: arts.map((a: any) => a.filename),
+            checklist: [{ name: 'Verifier', ok: false, detail: verifierReason.slice(0, 160) }],
+          }))
+          updateAgent('manager', { status: 'error', currentTask: 'Ditolak verifier' })
+          try {
+            await logTaskToSupabase(
+              get().github?.username || 'akward',
+              userTask,
+              get().github?.repoFullName,
+              buildTaskSummary({ status: 'fail', intent, files: arts.map((a: any) => a.filename), error: 'verifier: ' + verifierReason }),
+              'fail'
+            )
+            await get().loadTaskHistory()
+          } catch { /* */ }
+          return
+        }
       }
 
       let pushOk: string[] = []
