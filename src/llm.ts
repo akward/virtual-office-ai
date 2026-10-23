@@ -68,7 +68,18 @@ export async function callLLM(
     }
     if (res.ok) {
       const data = await res.json()
-      const content = data.choices?.[0]?.message?.content?.trim() || ''
+      const msg = data.choices?.[0]?.message || {}
+      let content = (msg.content || '').trim()
+      // Beberapa model free hanya mengisi reasoning / reasoning_details
+      if (!content && typeof msg.reasoning === 'string') content = msg.reasoning.trim()
+      if (!content && Array.isArray(msg.reasoning_details)) {
+        content = msg.reasoning_details
+          .map((d: any) => (typeof d === 'string' ? d : d?.text || d?.content || ''))
+          .filter(Boolean)
+          .join('\n')
+          .trim()
+      }
+      if (!content && typeof data.choices?.[0]?.text === 'string') content = data.choices[0].text.trim()
       if (!content) {
         lastErr = 'Model mengembalikan konten kosong'
         if (attempt < maxAttempts - 1) {
@@ -430,11 +441,13 @@ export async function callLLMMulti(
       alts.push('gemini-2.0-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash')
     } else if (b.includes('openrouter')) {
       alts.push(
-        'openai/gpt-oss-20b',
-        'google/gemini-2.0-flash-001',
-        'meta-llama/llama-3.3-70b-instruct',
-        'qwen/qwen-2.5-7b-instruct',
-        'openrouter/auto'
+        'poolside/laguna-s-2.1:free',
+        'openrouter/free',
+        'liquid/lfm-2.5-2.6b:free',
+        'nvidia/nemotron-3.5-lightning:free',
+        'xingchen-agi/xing4.0-29b-a4b:free',
+        'poolside/laguna-xs-2.1:free',
+        'recursive/flint-v1.0:free'
       )
     } else if (b.includes('groq')) {
       alts.push('llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'gemma2-9b-it')
