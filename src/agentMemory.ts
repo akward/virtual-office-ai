@@ -105,7 +105,28 @@ export const SEEDED_SKILLS: AgentSkill[] = [
     createdAt: 0,
   },
   {
+    id: 'password-argon2-backend',
+    name: 'Hash password di backend',
+    description: 'Ganti SHA-256/plaintext ke Argon2 hanya di API',
+    triggers: ['hash', 'argon2', 'argon', 'bcrypt', 'sha256', 'password', 'password_hash', 'login'],
+    body:
+      'Password hashing HANYA di backend: api/db.js (hashPassword + verifyPassword Argon2id), api/login.js (verify + rehash migrasi), api/users.js (create/reset await hashPassword), package.json dependency argon2. JANGAN edit app.js untuk hash. JANGAN buat api/auth.js baru. Baca file dari konteks REPO lalu tulis ulang lengkap di fence.',
+    source: 'seeded',
+    createdAt: 0,
+  },
+  {
+    id: 'use-repo-context',
+    name: 'Pakai konteks repo',
+    description: 'Jangan klaim tidak ada akses GitHub',
+    triggers: ['repo', 'github', 'file', 'api/', 'kerjakan', 'perbaiki', 'ganti'],
+    body:
+      'Sistem sudah menyuntik daftar file dan isi file di ## REPO. Kerjakan berdasarkan itu. Dilarang menjawab "saya tidak punya akses GitHub/terminal".',
+    source: 'seeded',
+    createdAt: 0,
+  },
+  {
     id: 'budget-custom-input',
+
 
     name: 'Budget custom di form realisasi',
     description: 'Form input realisasi mendukung budget baru, bukan hanya dropdown',
@@ -129,6 +150,10 @@ export const SEEDED_SKILLS: AgentSkill[] = [
 
 /** Pelajaran bawaan dari koreksi berulang user */
 export const SEEDED_LESSONS: string[] = [
+  'Hash password hanya di api/db.js + login + users — bukan app.js atau api/realisasi.js.',
+  'Jika ada ## REPO di prompt, jangan bilang tidak punya akses GitHub.',
+  'Setelah VERDICT FAIL, perbaiki file yang benar bukan file baru acak.',
+
   'Jangan kosongkan index.html/app.js/styles.css — perbaikan UI harus isi lengkap, bukan file 0 byte.',
   'Repo realisasi-anggaran adalah static SPA (bukan Next.js/CRA/shadcn) kecuali user minta sebaliknya.',
 
