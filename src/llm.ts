@@ -281,7 +281,7 @@ export const PROVIDERS = {
   gemini: {
     name: '2. Google AI Studio',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    models: ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'],
+    models: ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.0-flash'],
   },
   openrouter: {
     name: '3. OpenRouter',
@@ -438,7 +438,7 @@ export async function callLLMMulti(
     const b = (k.baseUrl || '').toLowerCase()
     const alts: string[] = []
     if (b.includes('generativelanguage.googleapis') || b.includes('googleapis.com')) {
-      alts.push('gemini-2.0-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash')
+      alts.push('gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-flash-latest')
     } else if (b.includes('openrouter')) {
       alts.push(
         'poolside/laguna-s-2.1:free',
