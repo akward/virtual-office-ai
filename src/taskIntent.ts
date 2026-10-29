@@ -50,7 +50,7 @@ export function classifyTaskIntent(task: string): TaskIntent {
   if (looksLikeProjectSpec(task)) return 'build'
 
   // "cek URL + kerjakan / harus lebih rinci" = kerja, bukan status
-  if (/\b(kerjakan|selesaikan)\b/.test(t) || (/\bharus\b/.test(t) && /\b(rinci|ubah|tambah|perbaiki)\b/.test(t))) {
+  if (/\b(kerjakan|selesaikan|lanjutkan|sampai selesai|bisa digunakan)\b/.test(t) || (/\bharus\b/.test(t) && /\b(rinci|ubah|tambah|perbaiki)\b/.test(t))) {
     if (/\b(perbaiki|tampilan|rinci|dashboard|form|budget|realisasi)\b/.test(t)) return 'fix'
     return 'build'
   }
