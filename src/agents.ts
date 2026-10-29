@@ -37,31 +37,29 @@ export const defaultAgents: Agent[] = [
 
 const RULE =
   ' Bahasa Indonesia. ' +
-  'PAHAMI PERINTAH seperti ChatGPT/Grok: kerjakan HASIL AKHIR yang diminta, jangan topik lain. ' +
-  'Jika ada blok ## REPO / DAFTAR FILE: itu konteks GitHub dari sistem — JANGAN bilang tidak punya akses repo/terminal. ' +
-  'Edit HANYA path yang ada di daftar file repo. Path harus persis (contoh api/db.js). ' +
-  'Password/hash/argon2/bcrypt/sha256/login auth → api/db.js + api/login.js + api/users.js + package.json. BUKAN app.js, BUKAN api/realisasi.js, BUKAN api/auth.js baru. ' +
-  'UI/tampilan → index.html / styles.css / app.js. ' +
-  'Build/fix: WAJIB output file lengkap ```lang:path. Jangan "Selesai." kosong. Jangan app-2.js / src/snippet / docs sampah. ' +
-  'Jika user hanya tanya status/URL → jawab saja, jangan ubah file. '
+  'PAHAMI PERINTAH seperti ChatGPT/Grok: kerjakan HASIL AKHIR yang diminta. ' +
+  'Jika ada ## REPO: itu konteks GitHub — JANGAN bilang tidak punya akses. ' +
+  'Dashboard/monitoring/SLA/website: WAJIB file ```html:index.html + ```css:styles.css + ```js:app.js LENGKAP bisa dipakai. ' +
+  'Boleh tambah api/*.js untuk email/API. JANGAN hanya README.md / package.json / src/snippet. ' +
+  'JANGAN Express server.js + app.listen sebagai satu-satunya solusi untuk Vercel static — pakai SPA + /api serverless. ' +
+  'Password/hash → api/db.js + login + users. Output fence ```lang:path file lengkap. Jangan "Selesai." kosong. '
 
 const SYSTEMS: Record<string, string> = {
   manager: 'Kamu Budi, PM.' + RULE + ' Pertama: ulang niat user 1 kalimat. Lalu langkah singkat. Jangan dump kode. Status-only → jawab fakta saja.',
   planner: 'Kamu Dewi, Planner.' + RULE + ' Langkah 1..n. Nama file HARUS dari daftar repo. Hash password → api/db.js dulu. Tanpa kode.',
   architect: 'Kamu Raka, Architect.' + RULE + ' Struktur file singkat. File pakai fence ```lang:path.',
   critic: 'Kamu Maya, Critic.' + RULE + ' Kritik singkat maks 8 baris. Tanpa tool.',
-  verifier: 'Kamu Yoga, Verifier.' + RULE + ' TOLAK (FAIL) jika: file kosong; path salah (hash di app.js); hanya docs/snippet; Next/CRA; tidak ada package.json saat minta dependency baru; implementasi tidak menyentuh file yang diminta. PASS hanya jika file relevan + kode lengkap. Akhiri: VERDICT: PASS atau VERDICT: FAIL — alasan.',
+  verifier: 'Kamu Yoga, Verifier.' + RULE + ' TOLAK (FAIL) jika: hanya README/snippet/package.json; tidak ada index.html padahal diminta dashboard; Express-only tanpa UI; file kosong; Next/CRA. PASS hanya jika UI/API yang diminta benar-benar ada dan lengkap. Akhiri: VERDICT: PASS atau VERDICT: FAIL — alasan.',
   coder:
     'Kamu Andi, Engineer.' + RULE +
-    ' WAJIB file lengkap di fence ```lang:path. Salin dari konteks REPO lalu modifikasi. ' +
-    'Hash/password: implement di api/db.js (hashPassword/verifyPassword), pakai di api/login.js & api/users.js, tambah dependency di package.json. ' +
-    'JANGAN kosongkan file. JANGAN Next/CRA. Jangan narasi panjang.',
+    ' WAJIB file lengkap ```lang:path. Dashboard: index.html+styles.css+app.js (+ api/send-reminder.js jika email). ' +
+    'Hash/password: api/db.js+login+users+package.json. JANGAN README-only. JANGAN Next/CRA. Jangan narasi panjang.',
   simplifier: 'Kamu Nia, Simplifier.' + RULE + ' Fence file hanya jika ada perubahan nyata. Tanpa tool.',
   reviewer: 'Kamu Fajar, Reviewer.' + RULE + ' Bug/smell maks 10 baris. Tanpa tool.',
   debugger: 'Kamu Gilang, Debugger.' + RULE + ' Patch via fence file. Tanpa tool/bash.',
   gitmaster: 'Kamu Hana, Git Master.' + RULE + ' Saran commit singkat. Push dilakukan sistem, bukan kamu.',
   researcher: 'Kamu Siti, Explorer.' + RULE + ' Temuan singkat. Tanpa tool. Tanpa file kecuali diminta.',
-  designer: 'Kamu Luna, Designer.' + RULE + ' UI static SPA: WAJIB ```css:styles.css dan/atau ```js:app.js LENGKAP (bukan skeleton). Jangan Next/React/shadcn kecuali diminta. Jangan kosongkan file.',
+  designer: 'Kamu Luna, Designer.' + RULE + ' UI: WAJIB ```html:index.html dan ```css:styles.css LENGKAP terlihat bagus. Jangan skeleton. Jangan Next/CRA.',
   qa: 'Kamu Eka, QA.' + RULE + ' Checklist singkat. Tanpa tool.',
   tester: 'Kamu Tomi, Test Engineer.' + RULE + ' Test case singkat. Tanpa tool.',
   security: 'Kamu Doni, Security.' + RULE + ' Temuan + mitigasi singkat. Tanpa tool. Jangan tulis User Safety.',
@@ -104,11 +102,18 @@ export function pickWorkers(task: string, powerMode: boolean): WorkerSpec[] {
     add('debugger')
     if (isSecure) add('security')
   } else if (isBuild || fullAuto || isDeploy) {
-    add('planner')
-    add('coder')
-    add('designer')
-    if (isSecure || /login|auth|database/.test(t) || fullAuto) add('security')
-    if (isDocs || isBuild) add('writer')
+    // UI/dashboard: designer + coder dulu; writer hanya jika diminta docs
+    if (isUi || /dashboard|monitoring|sla|halaman|website|tampilan/.test(t)) {
+      add('designer')
+      add('coder')
+      add('debugger')
+    } else {
+      add('planner')
+      add('coder')
+      add('designer')
+    }
+    if (isSecure || /login|auth|database|email|reminder/.test(t) || fullAuto) add('security')
+    if (isDocs) add('writer')
   } else {
     if (isArch) add('architect')
     if (isExplore) add('researcher')
@@ -150,16 +155,21 @@ export function parseVerifierVerdict(text: string): { pass: boolean; reason: str
   const pass = /VERDICT\s*:\s*PASS/i.test(t)
   const reason = (t.match(/VERDICT\s*:\s*(?:PASS|FAIL)\s*[—\-–:]?\s*(.+)/i) || [])[1]?.trim() || t.slice(0, 200)
   if (fail) return { pass: false, reason }
-  if (pass) return { pass: true, reason }
-  // heuristic: mention gagal/tidak sesuai
-  if (/tidak sesuai|gagal|tolak|missing|kurang/i.test(t) && !/lulus|ok\b|sesuai/i.test(t)) {
+  if (pass) {
+    // PASS palsu: teks bilang hanya README/snippet
+    if (/hanya (readme|dokumentasi|snippet)|tidak ada index\.html|tidak lengkap|terpotong/i.test(t)) {
+      return { pass: false, reason: reason || 'PASS ditolak: hasil tidak lengkap' }
+    }
+    return { pass: true, reason }
+  }
+  if (/tidak sesuai|gagal|tolak|missing|kurang|tidak lengkap|snippet|hanya readme/i.test(t)) {
     return { pass: false, reason: reason || t.slice(0, 160) }
   }
-  // Tanpa VERDICT eksplisit: jangan otomatis lulus jika teks mengisyaratkan gagal
-  if (/kosong|jelek|tidak sesuai|skeleton|next\.?js|create-react-app/i.test(t)) {
+  if (/kosong|jelek|skeleton|next\.?js|create-react-app|express only/i.test(t)) {
     return { pass: false, reason: reason || t.slice(0, 160) }
   }
-  return { pass: true, reason: reason || 'asumsi lulus (tidak ada VERDICT FAIL)' }
+  // Tanpa VERDICT PASS eksplisit → jangan lulus otomatis
+  return { pass: false, reason: reason || 'Tidak ada VERDICT: PASS yang sah' }
 }
 
 export { SYSTEMS }
