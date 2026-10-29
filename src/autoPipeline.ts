@@ -40,6 +40,8 @@ export function filterProductionArtifacts(
     const f = (a.filename || '').replace(/^\/+/, '')
     if (!f || f.length > 120) return false
     if (isJunkPath(f)) return false
+    if (/^src\/snippet/i.test(f)) return false
+    if (/^docs\/note-/i.test(f)) return false
     if (/^output[-_]/i.test(f.split('/').pop() || '')) return false
     if (/\.(sh|dotenv)$/i.test(f)) return false
     if (/^app-\d/i.test(f)) return false
@@ -74,6 +76,11 @@ export function filterProductionArtifacts(
 }
 
 /** Validasi keras sebelum push — cegah wipe & stack salah */
+export function isDashboardOrAppTask(task: string): boolean {
+  const t = (task || '').toLowerCase()
+  return /\b(dashboard|monitoring|aplikasi|website|halaman|ui|tampilan|sla|form|login|realisasi|buatkan|bikin app|web app)\b/.test(t)
+}
+
 export function validateArtifactsForPush(
   arts: { filename: string; content: string; action?: string }[],
   userTask: string
@@ -87,7 +94,7 @@ export function validateArtifactsForPush(
     if (a.action === 'delete') continue
     const f = a.filename
     const c = String(a.content || '')
-    if (/^(index\.html|app\.js|styles\.css)$/i.test(f) && c.trim().length < 50) {
+    if (/^(index\.html|app\.js|styles\.css)$/i.test(f) && c.trim().length < 80) {
       return { ok: false, reason: `File inti ${f} hampir kosong — push dibatalkan (cegah wipe)`, arts: cleaned }
     }
     if (/^package\.json$/i.test(f) && /react-scripts|"next":/i.test(c)) {
@@ -96,14 +103,84 @@ export function validateArtifactsForPush(
     if (/vercel\.json$/i.test(f) && /create-react-app|"outputDirectory":\s*"build"/i.test(c)) {
       return { ok: false, reason: 'vercel.json CRA/build — ditolak; gunakan static rewrites', arts: cleaned }
     }
-  }
-  // UI/tampilan fix harus menyentuh styles.css atau app.js
-  if (/\b(tampilan|ui|css|bagus|rapi|input realisasi|halaman)\b/.test(t)) {
-    const touched = cleaned.some((a) => /^(styles\.css|app\.js|index\.html)$/i.test(a.filename) && (a.content || '').length > 50)
-    if (!touched) {
-      return { ok: false, reason: 'Perbaikan tampilan wajib mengubah styles.css / app.js / index.html (bukan hanya docs)', arts: cleaned }
+    // Express server.js sebagai satu-satunya "app" di Vercel sering gagal
+    if (/^server\.js$/i.test(f) && /express|app\.listen/i.test(c) && isDashboardOrAppTask(t)) {
+      const hasUi = cleaned.some(
+        (x) => /^index\.html$/i.test(x.filename) && String(x.content || '').length > 200
+      )
+      if (!hasUi) {
+        return {
+          ok: false,
+          reason: 'Dashboard Vercel butuh index.html (+ styles.css/app.js), bukan hanya Express server.js',
+          arts: cleaned,
+        }
+      }
     }
   }
+
+  const names = cleaned.map((a) => a.filename.toLowerCase())
+  const hasIndex = cleaned.some((a) => /^index\.html$/i.test(a.filename) && String(a.content || '').length > 200)
+  const hasStyles = cleaned.some((a) => /^styles\.css$/i.test(a.filename) && String(a.content || '').length > 100)
+  const hasAppJs = cleaned.some((a) => /^app\.js$/i.test(a.filename) && String(a.content || '').length > 200)
+  const onlyDocs =
+    cleaned.length > 0 &&
+    cleaned.every(
+      (a) =>
+        a.action === 'delete' ||
+        /\.(md|txt)$/i.test(a.filename) ||
+        /^src\/snippet/i.test(a.filename) ||
+        /^docs\//i.test(a.filename)
+    )
+
+  if (onlyDocs && isDashboardOrAppTask(t)) {
+    return {
+      ok: false,
+      reason: 'Hanya README/snippet — ditolak. Wajib index.html + styles.css + app.js (dan api/* bila perlu)',
+      arts: cleaned,
+    }
+  }
+
+  if (isDashboardOrAppTask(t) && !/hanya\s+readme|dokumentasi saja/.test(t)) {
+    if (!hasIndex) {
+      return {
+        ok: false,
+        reason: 'Tugas dashboard/monitoring wajib menghasilkan index.html lengkap (bukan hanya package.json/README)',
+        arts: cleaned,
+      }
+    }
+    if (!hasStyles && !hasAppJs) {
+      return {
+        ok: false,
+        reason: 'Dashboard wajib styles.css dan/atau app.js berisi UI yang berfungsi',
+        arts: cleaned,
+      }
+    }
+  }
+
+  if (/\b(tampilan|ui|css|bagus|rapi|input realisasi|halaman|perbaiki tampilan)\b/.test(t)) {
+    const touched = cleaned.some(
+      (a) => /^(styles\.css|app\.js|index\.html)$/i.test(a.filename) && (a.content || '').length > 80
+    )
+    if (!touched) {
+      return {
+        ok: false,
+        reason: 'Perbaikan tampilan wajib mengubah styles.css / app.js / index.html (bukan hanya docs)',
+        arts: cleaned,
+      }
+    }
+  }
+
+  if (/\b(email|reminder|nodemailer|smtp)\b/.test(t) && isDashboardOrAppTask(t)) {
+    const hasApi = cleaned.some((a) => /^api\/.+\.js$/i.test(a.filename) && String(a.content || '').length > 100)
+    if (!hasApi && !hasAppJs) {
+      return {
+        ok: false,
+        reason: 'Fitur email/reminder wajib ada api/*.js atau logika di app.js',
+        arts: cleaned,
+      }
+    }
+  }
+
   return { ok: true, reason: '', arts: cleaned }
 }
 
