@@ -148,10 +148,18 @@ export function validateArtifactsForPush(
         arts: cleaned,
       }
     }
-    if (!hasStyles && !hasAppJs) {
+    const indexArt = cleaned.find((a) => /^index\.html$/i.test(a.filename))
+    const indexHtml = String(indexArt?.content || '')
+    // HTML mandiri: CSS/JS tertanam di index.html dianggap cukup
+    const selfContained =
+      indexHtml.length > 400 &&
+      (/<style[\s>]/i.test(indexHtml) || /style\s*=/i.test(indexHtml)) &&
+      (/<script[\s>]/i.test(indexHtml) || /onclick=/i.test(indexHtml))
+    if (!hasStyles && !hasAppJs && !selfContained) {
       return {
         ok: false,
-        reason: 'Dashboard wajib styles.css dan/atau app.js berisi UI yang berfungsi',
+        reason:
+          'Dashboard wajib styles.css + app.js, ATAU index.html mandiri berisi <style> dan <script> yang berfungsi',
         arts: cleaned,
       }
     }
