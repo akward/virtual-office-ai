@@ -22,7 +22,7 @@ import {
 import { deployToVercel, probeVercelAccount, setVercelEnvVars, findVercelProject } from './vercel'
 import { createNeonProject, runNeonSql, wantsNeonDatabase, inferNeonName, listNeonTables, listNeonProjects, wantsNeonProbe, wantsNeonConnectionString, fetchNeonConnectionUri } from './neon'
 import { wantsRepoCleanup, cleanRepoJunk } from './repoCleanup'
-import { wantsFullAuto, filterProductionArtifacts, validateArtifactsForPush, autoCleanAfterPush, autoDeployIfNeeded } from './autoPipeline'
+import { wantsFullAuto, filterProductionArtifacts, validateArtifactsForPush, isDashboardOrAppTask, autoCleanAfterPush, autoDeployIfNeeded } from './autoPipeline'
 import { openPreviewBrowser, verifyLiveUrl, formatVerifyReport } from './verifyDeploy'
 import { loadMemory, saveMemory, memoryBlock } from './agentMemory'
 import { saveToBackendImpl, loadFromBackendImpl, bootstrapCloudSync, logTaskToSupabase, fetchTaskHistory } from './storeBackend'
@@ -340,7 +340,7 @@ export const useStore = create<any>((set, get) => ({
       addMessage('System', formatStep('plan', 'Menyusun rencana singkat'))
       let plan = ''
       try {
-        const one = await callLLMMulti(config, `Kamu Budi, PM. Rencana maks 5 baris. WAJIB perintah user apa adanya. Sebut HANYA path yang muncul di DAFTAR FILE REPO. Hash/password/argon2 → api/db.js, api/login.js, api/users.js, package.json (bukan app.js). Jangan docs/CRA kecuali diminta. ${mem}`, `Perintah user (UTAMA):\n${userTask.slice(0, 1500)}\nPemahaman:\n${thoughtClean.slice(0, 400)}${richContext}\nPetunjuk: budget custom → app.js + api/realisasi.js; hash password → api/db.js + login + users + package.json.`, 400)
+        const one = await callLLMMulti(config, `Kamu Budi, PM. Rencana maks 5 baris. WAJIB perintah user apa adanya. Sebut HANYA path yang muncul di DAFTAR FILE REPO. Hash/password/argon2 → api/db.js, api/login.js, api/users.js, package.json (bukan app.js). Dashboard/SLA/monitoring → index.html + styles.css + app.js (+ api/*), JANGAN hanya README. Jangan docs/CRA kecuali diminta. ${mem}`, `Perintah user (UTAMA):\n${userTask.slice(0, 1500)}\nPemahaman:\n${thoughtClean.slice(0, 400)}${richContext}\nPetunjuk: budget custom → app.js + api/realisasi.js; hash password → api/db.js + login + users + package.json.`, 400)
         plan = one.text
       } catch { plan = await callLLM(config, 'Rencana singkat.', userTask + richContext, 350) }
       const planClean = sanitizeAgentChat(plan).slice(0, 400) || '1. Kerjakan perintah user\n2. Tulis file produksi\n3. Push & deploy bila perlu'
@@ -473,7 +473,7 @@ export const useStore = create<any>((set, get) => ({
 
       // Tolak hasil "palsu" yang hanya docs/snippet
       const meaningful = arts.filter((a: any) => !/^(docs\/|src\/snippet|src\/auth\.js$|output-)/i.test(a.filename) && !/\.(md|txt)$/i.test(a.filename))
-      if (arts.length && !meaningful.length && /budget|realisasi|form|input|dashboard|app\.js|perbaiki|custom|tampilan|ui|hash|password|argon|login|api\/db/i.test(userTask)) {
+      if (arts.length && !meaningful.length && /budget|realisasi|form|input|dashboard|monitoring|sla|reminder|email|app\.js|perbaiki|custom|tampilan|ui|hash|password|argon|login|api\/db|buatkan|website|halaman/i.test(userTask)) {
         addMessage('System', formatStep('error', 'Hasil agent tidak relevan (hanya docs/snippet) — push dibatalkan'))
         addMessage('Budi (Manager)', 'Gagal: agent menulis file yang tidak diminta. Fokus ke app.js / styles.css / api/.')
         updateAgent('manager', { status: 'error', currentTask: 'Hasil tidak relevan' })
