@@ -459,7 +459,13 @@ export const useStore = create<any>((set, get) => ({
           set({ artifacts: [] })
         }
 
-        const workers = pickWorkers(userTask, power || loop > 1)
+        let workers = pickWorkers(userTask, power || loop > 1)
+        // Putaran ulang UI: fokus designer+coder saja (hemat rate limit)
+        if (loop > 1 && /dashboard|monitoring|sla|tampilan|ui|halaman|website/i.test(userTask)) {
+          const slim = workers.filter((w) => w.id === 'designer' || w.id === 'coder' || w.id === 'debugger')
+          if (slim.length) workers = slim.slice(0, 2)
+        }
+
         addMessage(
           'System',
           formatStep(
@@ -477,8 +483,9 @@ export const useStore = create<any>((set, get) => ({
             const fixHint =
               loop > 1
                 ? `\n\nPUTARAN SEBELUMNYA GAGAL. Alasan: ${(verifierReason || lastLoopError).slice(0, 400)}\n` +
-                  'WAJIB hasilkan file UI lengkap: index.html + styles.css + app.js (+ api/* jika perlu). ' +
-                  'JANGAN hanya README/package.json/server.js Express. JANGAN snippet.'
+                  'KRITIS: tulis TIGA fence file: ```html:index.html  ```css:styles.css  ```js:app.js  ' +
+                  'masing-masing ISI LENGKAP (bukan skeleton). Atau SATU index.html dengan <style>...</style> dan <script>...</script>. ' +
+                  'JANGAN hanya index.html tanpa CSS/JS. JANGAN hanya README/package.json/server.js.'
                 : ''
             const out = await callLLMMulti(
               config,
