@@ -139,13 +139,16 @@ export const useStore = create<any>((set, get) => ({
   resolveFollowUpTask: (task: string) => {
     const t = task.trim()
     const isShort =
-      t.length <= 60 &&
+      t.length <= 120 &&
       /^(kerjakan|lanjutkan|selesaikan|perbaiki(\s+semuanya)?|fix(\s+it)?|do it|ya kerjakan|oke kerjakan)[.!]?$/i.test(t)
+    const isContinueUntilDone =
+      /\b(lanjutkan|lanjutkan sampai|sampai selesai|sampai bisa|bisa digunakan|kerjakan ulang|coba lagi)\b/i.test(t) &&
+      t.length <= 200
     const isVagueFix =
-      t.length <= 80 &&
+      t.length <= 120 &&
       /\b(perbaiki|kerjakan|selesaikan)\b/i.test(t) &&
-      /\b(semuanya|itu|tersebut|diatas|di atas|masih sama|belum berubah)\b/i.test(t)
-    if (!isShort && !isVagueFix) return task
+      /\b(semuanya|itu|tersebut|diatas|di atas|masih sama|belum berubah|verifier|tolak)\b/i.test(t)
+    if (!isShort && !isVagueFix && !isContinueUntilDone) return task
     const msgs = get().messages || []
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i]
@@ -262,7 +265,15 @@ export const useStore = create<any>((set, get) => ({
       let intent: TaskIntent = 'ask'
       try { intent = await classifyTaskIntentWithLLM(config, userTask) }
       catch { intent = isChatOnlyTask(userTask) ? 'ask' : 'build' }
-      const chatOnly = isChatOnlyIntent(intent)
+      // "lanjutkan sampai selesai" = selalu mode kerja, bukan tanya
+      if (/\b(lanjutkan|sampai selesai|bisa digunakan|kerjakan ulang|coba lagi|verifier)\b/i.test(userTask)) {
+        if (intent === 'ask' || intent === 'status') intent = 'build'
+      }
+      let chatOnly = isChatOnlyIntent(intent)
+      if (/\b(lanjutkan|sampai selesai|bisa digunakan|kerjakan)\b/i.test(userTask) && chatOnly) {
+        chatOnly = false
+        intent = 'build'
+      }
       addMessage('System', formatStep('intent', `Niat = ${intent}`, chatOnly ? 'mode tanya (tanpa file)' : 'mode kerja'))
 
       const liveStatus = () => {
@@ -427,75 +438,130 @@ export const useStore = create<any>((set, get) => ({
         }
       }
 
-      const workers = pickWorkers(userTask, power)
-      addMessage('System', formatStep('files', `Tim menulis file (${workers.length})`, workers.map((w) => w.name).join(', ')))
-
-      for (let wi = 0; wi < workers.length; wi++) {
-        const w = workers[wi]
-        if (wi > 0) await paceBetweenAgents(Math.min(pace, 5000))
-        updateAgent(w.id, { status: 'working', currentTask: 'Kerja...' })
-        try {
-          const out = await callLLMMulti(
-            config,
-            w.system +
-              mem +
-              '\nOutput bersih. Kerjakan PERSIS perintah user. ' +
-              'Pakai path dari DAFTAR FILE REPO saja. Hash/password → api/db.js+api/login.js+api/users.js+package.json. ' +
-              'Jangan bilang tidak punya akses. WAJIB fence ```lang:path berisi file lengkap.',
-            `Perintah user:\n${userTask.slice(0, 1500)}\nRencana PM:\n${planClean.slice(0, 600)}${richContext}`,
-            tok
-          )
-          const before = get().artifacts.length
-          collectFrom(w.id, out.text)
-          const names = get().artifacts.slice(before).map((a: any) => a.filename).filter(Boolean)
-          addMessage(w.name, names.length ? `✅ ${names.join(', ')}` : (sanitizeAgentChat(out.text).slice(0, 160) || 'Selesai.'))
-          updateAgent(w.id, { status: 'done', currentTask: 'Selesai', lastMessage: names[0] || 'ok' })
-        } catch (e: unknown) {
-          addMessage(w.name, 'Error: ' + (e instanceof Error ? e.message : String(e)))
-          updateAgent(w.id, { status: 'error', currentTask: 'Gagal' })
-        }
-      }
-
-      const validated = validateArtifactsForPush(
-        (get().artifacts as any[]).filter((a: any) => a.action === 'delete' || /^[a-zA-Z0-9_./@+-]+$/.test(a.filename)),
-        userTask
-      )
-      let arts = validated.arts.filter((a: any) => a.action !== 'delete')
-      if (!validated.ok) {
-        addMessage('System', formatStep('error', 'Push dibatalkan — ' + validated.reason))
-        addMessage('Budi (Manager)', 'Gagal guardrail: ' + validated.reason)
-        updateAgent('manager', { status: 'error', currentTask: 'Ditolak guardrail' })
-        try {
-          await logTaskToSupabase(get().github?.username || 'akward', userTask, get().github?.repoFullName, buildTaskSummary({ status: 'fail', intent, files: arts.map((a: any) => a.filename), error: validated.reason }), 'fail')
-        } catch { /* */ }
-        return
-      }
-
-      // Tolak hasil "palsu" yang hanya docs/snippet
-      const meaningful = arts.filter((a: any) => !/^(docs\/|src\/snippet|src\/auth\.js$|output-)/i.test(a.filename) && !/\.(md|txt)$/i.test(a.filename))
-      if (arts.length && !meaningful.length && /budget|realisasi|form|input|dashboard|monitoring|sla|reminder|email|app\.js|perbaiki|custom|tampilan|ui|hash|password|argon|login|api\/db|buatkan|website|halaman/i.test(userTask)) {
-        addMessage('System', formatStep('error', 'Hasil agent tidak relevan (hanya docs/snippet) — push dibatalkan'))
-        addMessage('Budi (Manager)', 'Gagal: agent menulis file yang tidak diminta. Fokus ke app.js / styles.css / api/.')
-        updateAgent('manager', { status: 'error', currentTask: 'Hasil tidak relevan' })
-        try {
-          await logTaskToSupabase(get().github?.username || 'akward', userTask, get().github?.repoFullName, buildTaskSummary({ status: 'fail', intent, files: arts.map((a: any) => a.filename), error: 'hasil tidak relevan' }), 'fail')
-        } catch { /* */ }
-        return
-      }
-
-      // —— Verifier wajib (Yoga): tolak push jika kriteria user belum terpenuhi ——
-      let verifierPass = true
+      // —— Loop sampai verifier PASS (maks 8 putaran) ——
+      const MAX_QUALITY_LOOPS = 8
+      let verifierPass = false
       let verifierReason = ''
-      try {
-        const vw = getVerifierWorker()
-        updateAgent('verifier', { status: 'working', currentTask: 'Verifikasi hasil...' })
-        addMessage('System', formatStep('checklist', 'Verifier (Yoga) menilai hasil vs perintah user'))
-        const fileNames = arts.map((a: any) => a.filename)
-        const samples = arts.slice(0, 4).map((a: any) => `### ${a.filename}\n${String(a.content || '').slice(0, 400)}`).join('\n')
-        const vOut = await callLLMMulti(
-          config,
-          vw.system + mem,
-          `Tugas user (kriteria):
+      let arts: any[] = []
+      let lastLoopError = ''
+
+      for (let loop = 1; loop <= MAX_QUALITY_LOOPS; loop++) {
+        if (loop > 1) {
+          addMessage(
+            'System',
+            formatStep(
+              'files',
+              `Putaran ${loop}/${MAX_QUALITY_LOOPS} — agent memperbaiki sampai lulus`,
+              (verifierReason || lastLoopError || 'verifier/guardrail').slice(0, 160)
+            )
+          )
+          // hapus artifact jelek, tulis ulang
+          set({ artifacts: [] })
+        }
+
+        const workers = pickWorkers(userTask, power || loop > 1)
+        addMessage(
+          'System',
+          formatStep(
+            'files',
+            `Tim menulis file (${workers.length})` + (loop > 1 ? ` · retry ${loop}` : ''),
+            workers.map((w) => w.name).join(', ')
+          )
+        )
+
+        for (let wi = 0; wi < workers.length; wi++) {
+          const w = workers[wi]
+          if (wi > 0) await paceBetweenAgents(Math.min(pace, 5000))
+          updateAgent(w.id, { status: 'working', currentTask: loop > 1 ? `Perbaiki #${loop}` : 'Kerja...' })
+          try {
+            const fixHint =
+              loop > 1
+                ? `\n\nPUTARAN SEBELUMNYA GAGAL. Alasan: ${(verifierReason || lastLoopError).slice(0, 400)}\n` +
+                  'WAJIB hasilkan file UI lengkap: index.html + styles.css + app.js (+ api/* jika perlu). ' +
+                  'JANGAN hanya README/package.json/server.js Express. JANGAN snippet.'
+                : ''
+            const out = await callLLMMulti(
+              config,
+              w.system +
+                mem +
+                '\nOutput bersih. Kerjakan PERSIS perintah user. ' +
+                'Pakai path dari DAFTAR FILE REPO saja. Dashboard: index.html+styles.css+app.js. ' +
+                'Jangan bilang tidak punya akses. WAJIB fence ```lang:path berisi file lengkap.' +
+                fixHint,
+              `Perintah user:\n${userTask.slice(0, 1500)}\nRencana PM:\n${planClean.slice(0, 600)}${richContext}`,
+              tok
+            )
+            const before = get().artifacts.length
+            collectFrom(w.id, out.text)
+            const names = get().artifacts.slice(before).map((a: any) => a.filename).filter(Boolean)
+            addMessage(w.name, names.length ? `✅ ${names.join(', ')}` : (sanitizeAgentChat(out.text).slice(0, 160) || 'Selesai.'))
+            updateAgent(w.id, { status: 'done', currentTask: 'Selesai', lastMessage: names[0] || 'ok' })
+          } catch (e: unknown) {
+            addMessage(w.name, 'Error: ' + (e instanceof Error ? e.message : String(e)))
+            updateAgent(w.id, { status: 'error', currentTask: 'Gagal' })
+          }
+        }
+
+        const validated = validateArtifactsForPush(
+          (get().artifacts as any[]).filter((a: any) => a.action === 'delete' || /^[a-zA-Z0-9_./@+-]+$/.test(a.filename)),
+          userTask
+        )
+        arts = validated.arts.filter((a: any) => a.action !== 'delete')
+        if (!validated.ok) {
+          lastLoopError = validated.reason
+          verifierPass = false
+          verifierReason = validated.reason
+          addMessage('System', formatStep('error', `Guardrail putaran ${loop}: ` + validated.reason.slice(0, 180)))
+          if (loop < MAX_QUALITY_LOOPS) continue
+          addMessage('System', formatStep('error', 'Push dibatalkan setelah ' + MAX_QUALITY_LOOPS + ' putaran — ' + validated.reason))
+          addMessage('Budi (Manager)', 'Gagal guardrail: ' + validated.reason)
+          updateAgent('manager', { status: 'error', currentTask: 'Ditolak guardrail' })
+          try {
+            await logTaskToSupabase(
+              get().github?.username || 'akward',
+              userTask,
+              get().github?.repoFullName,
+              buildTaskSummary({ status: 'fail', intent, files: arts.map((a: any) => a.filename), error: validated.reason }),
+              'fail'
+            )
+          } catch { /* */ }
+          return
+        }
+
+        const meaningful = arts.filter(
+          (a: any) => !/^(docs\/|src\/snippet|src\/auth\.js$|output-)/i.test(a.filename) && !/\.(md|txt)$/i.test(a.filename)
+        )
+        if (
+          arts.length &&
+          !meaningful.length &&
+          /budget|realisasi|form|input|dashboard|monitoring|sla|reminder|email|app\.js|perbaiki|custom|tampilan|ui|hash|password|argon|login|api\/db|buatkan|website|halaman/i.test(
+            userTask
+          )
+        ) {
+          lastLoopError = 'hanya docs/snippet'
+          verifierPass = false
+          verifierReason = 'Hasil tidak relevan (hanya docs/snippet)'
+          addMessage('System', formatStep('error', `Putaran ${loop}: hasil tidak relevan — ulang`))
+          if (loop < MAX_QUALITY_LOOPS) continue
+          addMessage('System', formatStep('error', 'Hasil agent tidak relevan setelah max putaran'))
+          updateAgent('manager', { status: 'error', currentTask: 'Hasil tidak relevan' })
+          return
+        }
+
+        // Verifier
+        try {
+          const vw = getVerifierWorker()
+          updateAgent('verifier', { status: 'working', currentTask: `Verifikasi #${loop}` })
+          addMessage('System', formatStep('checklist', `Verifier (Yoga) putaran ${loop}/${MAX_QUALITY_LOOPS}`))
+          const fileNames = arts.map((a: any) => a.filename)
+          const samples = arts
+            .slice(0, 5)
+            .map((a: any) => `### ${a.filename}\n${String(a.content || '').slice(0, 400)}`)
+            .join('\n')
+          const vOut = await callLLMMulti(
+            config,
+            vw.system + mem,
+            `Tugas user (kriteria):
 ${userTask.slice(0, 1800)}
 
 Rencana PM:
@@ -506,102 +572,81 @@ File dihasilkan (${fileNames.length}): ${fileNames.join(', ') || '(kosong)'}
 Cuplikan:
 ${samples || '(tidak ada)'}
 
-Putuskan VERDICT: PASS atau VERDICT: FAIL.`,
-          500
-        )
-        const verdict = parseVerifierVerdict(vOut.text)
-        verifierPass = verdict.pass
-        verifierReason = verdict.reason
-        addMessage(
-          vw.name,
-          verifierPass
-            ? `VERDICT: PASS — ${verifierReason.slice(0, 180)}`
-            : `VERDICT: FAIL — ${verifierReason.slice(0, 220)}`
-        )
-        updateAgent('verifier', {
-          status: verifierPass ? 'done' : 'error',
-          currentTask: verifierPass ? 'Lulus' : 'Gagal',
-          lastMessage: verifierPass ? 'PASS' : 'FAIL',
-        })
-      } catch (ve: unknown) {
-        // jangan blokir total jika verifier LLM error — lanjut dengan peringatan
-        verifierPass = true
-        verifierReason = 'verifier skip: ' + (ve instanceof Error ? ve.message : String(ve))
-        addMessage('System', 'Verifier skip: ' + verifierReason.slice(0, 160))
-        updateAgent('verifier', { status: 'idle', currentTask: '' })
-      }
-
-      if (!verifierPass) {
-        // Satu kali retry otomatis dengan umpan balik verifier
-        addMessage('System', formatStep('files', 'Verifier FAIL — retry 1× dengan koreksi', verifierReason.slice(0, 160)))
-        try {
-          const fixWorkers = pickWorkers(userTask, false).filter((w) =>
-            ['coder', 'debugger', 'simplifier'].includes(w.id)
+Putuskan VERDICT: PASS atau VERDICT: FAIL. Dashboard wajib punya index.html yang berisi UI, bukan hanya server.js.`,
+            500
           )
-          const retryList = fixWorkers.length ? fixWorkers.slice(0, 2) : pickWorkers(userTask, false).slice(0, 2)
-          for (const w of retryList) {
-            updateAgent(w.id, { status: 'working', currentTask: 'Perbaiki (retry)...' })
-            try {
-              const out = await callLLMMulti(
-                config,
-                w.system + mem +
-                  ' PERBAIKI sesuai kritik verifier. Output file lengkap ```lang:path dari daftar REPO saja.',
-                `Tugas user:\n${userTask.slice(0, 1200)}\n\nVerifier FAIL karena:\n${verifierReason.slice(0, 400)}\n\nFile sebelumnya salah: ${(get().artifacts as any[]).map((a: any) => a.filename).join(', ')}\n\n${richContext.slice(0, 9000)}`,
-                tok
-              )
-              const clean = sanitizeAgentChat(out.text)
-              addMessage(w.name, clean.slice(0, 1200) || 'Selesai.')
-              collectFrom(w.id, out.text)
-              updateAgent(w.id, { status: 'done', currentTask: 'Retry selesai', lastMessage: clean.slice(0, 80) })
-            } catch (re: unknown) {
-              updateAgent(w.id, { status: 'error', currentTask: 'Retry gagal' })
-              addMessage(w.name, 'Error: ' + (re instanceof Error ? re.message : String(re)))
-            }
-            await paceBetweenAgents(pace)
+          const verdict = parseVerifierVerdict(vOut.text)
+          verifierPass = verdict.pass
+          verifierReason = verdict.reason
+          // Heuristik keras: dashboard tanpa index.html = gagal
+          if (
+            isDashboardOrAppTask(userTask) &&
+            !arts.some((a: any) => /^index\.html$/i.test(a.filename) && String(a.content || '').length > 200)
+          ) {
+            verifierPass = false
+            verifierReason = 'Tidak ada index.html UI lengkap'
           }
-          // re-validate artifacts after retry
-          const reval = validateArtifactsForPush(
-            (get().artifacts as any[]).filter((a: any) => a.action === 'delete' || /^[a-zA-Z0-9_./@+-]+$/.test(a.filename)),
-            userTask
+          addMessage(
+            vw.name,
+            verifierPass
+              ? `VERDICT: PASS — ${verifierReason.slice(0, 180)}`
+              : `VERDICT: FAIL — ${verifierReason.slice(0, 220)}`
           )
-          arts = reval.arts.filter((a: any) => a.action !== 'delete')
-          const samples2 = arts
-            .slice(0, 4)
-            .map((a: any) => `### ${a.filename}\n${String(a.content || '').slice(0, 280)}`)
-            .join('\n')
-          const vOut2 = await callLLMMulti(
-            config,
-            (getVerifierWorker().system || '') + mem,
-            `Tugas user:\n${userTask.slice(0, 1500)}\nFile setelah retry: ${arts.map((a: any) => a.filename).join(', ')}\n${samples2}\nVERDICT: PASS atau FAIL.`,
-            400
-          )
-          const v2 = parseVerifierVerdict(vOut2.text)
-          verifierPass = v2.pass
-          verifierReason = v2.reason
-          addMessage(getVerifierWorker().name, verifierPass ? `VERDICT: PASS — ${verifierReason.slice(0, 160)}` : `VERDICT: FAIL — ${verifierReason.slice(0, 200)}`)
-        } catch (rx: unknown) {
-          addMessage('System', 'Retry verifier gagal: ' + (rx instanceof Error ? rx.message : String(rx)))
+          updateAgent('verifier', {
+            status: verifierPass ? 'done' : 'error',
+            currentTask: verifierPass ? 'Lulus' : `Gagal #${loop}`,
+            lastMessage: verifierPass ? 'PASS' : 'FAIL',
+          })
+        } catch (ve: unknown) {
+          // LLM verifier error: tetap cek hard rules
+          const hardOk =
+            !isDashboardOrAppTask(userTask) ||
+            arts.some((a: any) => /^index\.html$/i.test(a.filename) && String(a.content || '').length > 200)
+          verifierPass = hardOk
+          verifierReason = hardOk
+            ? 'verifier skip (LLM error), hard-check OK'
+            : 'verifier skip + hard-check FAIL: butuh index.html'
+          addMessage('System', 'Verifier: ' + verifierReason.slice(0, 160))
         }
-        if (!verifierPass) {
-          addMessage('System', formatStep('error', 'Push/deploy dibatalkan — Verifier menolak hasil', verifierReason.slice(0, 200)))
-          addMessage('Budi (Manager)', formatResultSummary({
+
+        if (verifierPass) {
+          addMessage('System', formatStep('checklist', `Lulus verifier pada putaran ${loop}`))
+          break
+        }
+
+        if (loop < MAX_QUALITY_LOOPS) {
+          addMessage(
+            'System',
+            formatStep('files', `Verifier FAIL — lanjut putaran ${loop + 1}/${MAX_QUALITY_LOOPS}`, verifierReason.slice(0, 160))
+          )
+          continue
+        }
+
+        addMessage('System', formatStep('error', 'Push/deploy dibatalkan setelah ' + MAX_QUALITY_LOOPS + ' putaran', verifierReason.slice(0, 200)))
+        addMessage(
+          'Budi (Manager)',
+          formatResultSummary({
             intent,
             fileNames: arts.map((a: any) => a.filename),
             checklist: [{ name: 'Verifier', ok: false, detail: verifierReason.slice(0, 160) }],
-          }))
-          updateAgent('manager', { status: 'error', currentTask: 'Ditolak verifier' })
-          try {
-            await logTaskToSupabase(
-              get().github?.username || 'akward',
-              userTask,
-              get().github?.repoFullName,
-              buildTaskSummary({ status: 'fail', intent, files: arts.map((a: any) => a.filename), error: 'verifier: ' + verifierReason }),
-              'fail'
-            )
-            await get().loadTaskHistory()
-          } catch { /* */ }
-          return
-        }
+          })
+        )
+        updateAgent('manager', { status: 'error', currentTask: 'Ditolak verifier' })
+        try {
+          await logTaskToSupabase(
+            get().github?.username || 'akward',
+            userTask,
+            get().github?.repoFullName,
+            buildTaskSummary({ status: 'fail', intent, files: arts.map((a: any) => a.filename), error: 'verifier: ' + verifierReason }),
+            'fail'
+          )
+          await get().loadTaskHistory()
+        } catch { /* */ }
+        return
+      }
+
+      if (!verifierPass) {
+        return
       }
 
       let pushOk: string[] = []
