@@ -83,7 +83,7 @@ export async function callLLM(
       if (!content) {
         lastErr = 'Model mengembalikan konten kosong'
         if (attempt < maxAttempts - 1) {
-          await sleep(800 * (attempt + 1))
+          await sleep(1200 * (attempt + 1))
           continue
         }
         throw new Error('Model tidak mengembalikan teks. Coba model/API key lain.')
@@ -97,8 +97,8 @@ export async function callLLM(
     }
     // 429/503: max 1x retry singkat, lalu lempar agar callLLMMulti ganti provider/model
     if (res.status === 429 || res.status === 503 || /UNAVAILABLE|high demand|overloaded|capacity|rate limit/i.test(err)) {
-      if (attempt < 1) {
-        await sleep(res.status === 503 ? 1200 : 800)
+      if (attempt < 3) {
+        await sleep(res.status === 503 ? 2000 * (attempt + 1) : 3000 * (attempt + 1))
         continue
       }
       throw new Error(
