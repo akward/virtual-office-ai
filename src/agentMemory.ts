@@ -105,7 +105,28 @@ export const SEEDED_SKILLS: AgentSkill[] = [
     createdAt: 0,
   },
   {
+    id: 'sla-dashboard-static',
+    name: 'Dashboard monitoring static Vercel',
+    description: 'UI lengkap + API reminder, bukan Express server.js saja',
+    triggers: ['dashboard', 'monitoring', 'sla', 'reminder', 'email', 'vercel', 'buatkan'],
+    body:
+      'Untuk dashboard monitoring (SLA dll) di Vercel: WAJIB index.html + styles.css + app.js yang menampilkan UI. Reminder email via api/*.js (serverless). JANGAN hanya README/package.json/src/snippet. JANGAN mengandalkan Express server.js + app.listen sebagai satu-satunya file. Data bisa localStorage; SMTP lewat env.',
+    source: 'seeded',
+    createdAt: 0,
+  },
+  {
+    id: 'no-readme-only-success',
+    name: 'Jangan sukses hanya README',
+    description: 'Build app harus ada file UI',
+    triggers: ['buat', 'bikin', 'buatkan', 'dashboard', 'aplikasi', 'deploy'],
+    body:
+      'Sukses build berarti ada file produksi UI/API. README saja = gagal. Verifier harus FAIL jika tidak ada index.html untuk tugas dashboard.',
+    source: 'seeded',
+    createdAt: 0,
+  },
+  {
     id: 'password-argon2-backend',
+
     name: 'Hash password di backend',
     description: 'Ganti SHA-256/plaintext ke Argon2 hanya di API',
     triggers: ['hash', 'argon2', 'argon', 'bcrypt', 'sha256', 'password', 'password_hash', 'login'],
@@ -150,6 +171,9 @@ export const SEEDED_SKILLS: AgentSkill[] = [
 
 /** Pelajaran bawaan dari koreksi berulang user */
 export const SEEDED_LESSONS: string[] = [
+  'Dashboard/monitoring di Vercel: index.html+styles.css+app.js (+api), bukan README-only atau Express-only.',
+  'Verifier PASS palsu pada snippet harus ditolak; tanpa index.html untuk dashboard = FAIL.',
+
   'Hash password hanya di api/db.js + login + users — bukan app.js atau api/realisasi.js.',
   'Jika ada ## REPO di prompt, jangan bilang tidak punya akses GitHub.',
   'Setelah VERDICT FAIL, perbaiki file yang benar bukan file baru acak.',
